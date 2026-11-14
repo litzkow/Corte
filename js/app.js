@@ -17,6 +17,8 @@ import { uid, deepClone, clamp, sleep } from './engine/util.js';
 import { icon } from './icons.js';
 import * as store from './store.js';
 
+export const APP_VERSION = '2.1', APP_DATE = '14/11/2026';
+
 const $ = s => document.querySelector(s);
 const el = (tag, attrs = {}, ...kids) => { const e = document.createElement(tag); for (const [k, v] of Object.entries(attrs)) { if (k === 'class') e.className = v; else if (k === 'html') e.innerHTML = v; else if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else if (v === true) e.setAttribute(k, ''); else if (v !== false && v != null) e.setAttribute(k, v); } for (const k of kids.flat()) if (k != null) e.append(k.nodeType ? k : document.createTextNode(String(k))); return e; };
 const tc = (t, dec = true) => { t = Math.max(0, t || 0); const m = Math.floor(t / 60), s = t - m * 60; return String(m).padStart(2, '0') + ':' + (dec ? s.toFixed(1).padStart(4, '0') : String(Math.floor(s)).padStart(2, '0')); };
@@ -706,6 +708,7 @@ function settingsSheet() {
   openSheet('Ajustes', null,
     label('Idioma da voz'), el('div', { class: 'chips' }, ...[['pt-BR', 'Português'], ['en-US', 'Inglês']].map(([k, l]) => el('button', { class: 'chip' + (prefs.voiceLang === k ? ' on' : ''), onclick: () => { prefs.voiceLang = k; store.savePrefs(prefs); settingsSheet(); } }, l))),
     label('Meus estilos (toque para apagar)'), styles.length ? el('div', { class: 'chips' }, ...styles.map(s => el('button', { class: 'chip', onclick: () => { store.saveStyles(store.loadStyles().filter(x => x.name !== s.name)); settingsSheet(); } }, s.name + ' ×'))) : el('p', { class: 'muted' }, 'Depois de gostar de um resultado, diga "salva esse estilo".'),
+    label('Versão'), el('p', { class: 'muted' }, `Corte ${APP_VERSION} · publicada em ${APP_DATE}`),
     label('Como funciona'),
     el('ul', { class: 'issues' },
       el('li', {}, 'Tudo roda no seu aparelho. Seus vídeos não são enviados para lugar nenhum.'),
@@ -772,6 +775,7 @@ async function openProject(id) {
 // LIGAÇÕES
 // =====================================================================
 function bind() {
+  const av = $('#appVersion'); if (av) av.textContent = `Corte · versão ${APP_VERSION} · ${APP_DATE}`;
   $('#btnSettings').innerHTML = icon('gear'); $('#btnBack').innerHTML = icon('back'); $('#btnUndo').innerHTML = icon('undo', 20); $('#btnRedo').innerHTML = icon('redo', 20);
   $('#btnPlay').innerHTML = icon('play', 22); $('#btnMic').innerHTML = '<span class="ring"></span>' + icon('mic', 20); $('#btnSend').innerHTML = icon('send', 20); $('#sheetX').innerHTML = icon('close', 20);
   $('#btnNew').querySelector('.plus').innerHTML = icon('plus', 26);
