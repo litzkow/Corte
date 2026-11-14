@@ -106,8 +106,12 @@ export async function analyzeImage(src) {
   return { step: src.duration, duration: src.duration, cuts: [], shots: [shot], samples: [{ t: 0, mean: s.mean, motion: 0, sat: s.sat, cx: s.cx, cy: s.cy, skin: s.skin }], still: true };
 }
 
-export async function analyzeVideo(src, { onProgress, step } = {}) {
+export async function analyzeVideo(src, opts = {}) {
   const seeker = await makeSeeker(src);
+  try { return await analyzeVideoWith(seeker, src, opts); }
+  finally { seeker.dispose(); }   // solta o vídeo mesmo se a análise for cancelada no meio
+}
+async function analyzeVideoWith(seeker, src, { onProgress, step } = {}) {
   const cv = document.createElement('canvas'); cv.width = SW; cv.height = SH;
   const ctx = cv.getContext('2d', { willReadFrequently: true });
   const thumbCv = document.createElement('canvas');
@@ -191,7 +195,6 @@ export async function analyzeVideo(src, { onProgress, step } = {}) {
       dominant: dominantColor(ss),
     });
   }
-  seeker.dispose();
   onProgress && onProgress(1);
   return {
     step: dt, duration: dur, cuts, shots,

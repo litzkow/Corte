@@ -4,7 +4,8 @@ import { loadSource, validateFile } from './engine/media.js';
 import { analyzeSource, analyzeMusicSource, forget } from './engine/pipeline.js';
 import { interpret, newSpec, resolveStyle, fmtN, fmtDur } from './engine/director.js';
 import { buildPlan } from './engine/planner.js';
-import { Renderer, visualSegments } from './engine/render.js';
+import { Renderer, visualSegments, VideoPool, MixCache } from './engine/render.js';
+import { Compositor } from './engine/gl.js';
 import { PRESETS, LOOKS } from './engine/styles.js';
 import { PLATFORMS } from './engine/platforms.js';
 import { CAPTION_STYLES, SHAPES, TEXT_STYLES, drawTextBlock, drawCaption, groupWords, markEmphasis, drawShape, ensureFonts, FONTS, googleFontsHref } from './engine/captions.js';
@@ -17,7 +18,7 @@ import { uid, deepClone, clamp, sleep } from './engine/util.js';
 import { icon } from './icons.js';
 import * as store from './store.js';
 
-export const APP_VERSION = '2.3', APP_DATE = '14/11/2026';
+export const APP_VERSION = '2.4', APP_DATE = '14/11/2026';
 
 const $ = s => document.querySelector(s);
 const el = (tag, attrs = {}, ...kids) => { const e = document.createElement(tag); for (const [k, v] of Object.entries(attrs)) { if (k === 'class') e.className = v; else if (k === 'html') e.innerHTML = v; else if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else if (v === true) e.setAttribute(k, ''); else if (v !== false && v != null) e.setAttribute(k, v); } for (const k of kids.flat()) if (k != null) e.append(k.nodeType ? k : document.createTextNode(String(k))); return e; };
@@ -30,6 +31,7 @@ const S = {
   project: null, sources: [], music: null, musicA: null, ref: null, refPending: false, items: new Map(),
   versions: [], cur: -1, transcript: {}, pendingStyle: null,
   renderer: null, busy: false, playing: false, sel: null, pps: 50, syncing: false, lastT: 0.5,
+  comp: null, vpool: new VideoPool(), mixCache: new MixCache(), queue: [], cancel: false,
 };
 const curV = () => S.versions[S.cur] || null;
 const curPlan = () => (curV() || {}).plan || null;
@@ -106,7 +108,9 @@ function railAnim() { if (railStop) railStop(); ensureFonts(Object.keys(FONTS));
 // =====================================================================
 // PROJETO E MÍDIA
 // =====================================================================
+function releaseMedia() { if (S.renderer) { S.renderer.dispose(); S.renderer = null; } S.vpool.clear(); S.mixCache.clear(); }
 function newProject() {
+  releaseMedia();
   if (S.renderer) S.renderer.dispose();
   Object.assign(S, { project: { id: uid('proj'), name: 'Projeto ' + new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }), createdAt: Date.now() }, sources: [], music: null, musicA: null, ref: null, refPending: false, items: new Map(), versions: [], cur: -1, transcript: {}, renderer: null, sel: null, pendingStyle: null, lastT: 0.5 });
   openEditor();
@@ -181,9 +185,20 @@ function setBusy(on, list) {
 }
 function stage(k, state, pct, label) { const li = document.getElementById('st_' + k); if (!li) return; li.className = state; if (label) li.firstChild.textContent = label; li.lastChild.textContent = state === 'run' && pct != null ? Math.round(pct * 100) + '%' : state === 'done' ? '✓' : ''; }
 
+// Pedidos feitos enquanto o app trabalha não se perdem: entram numa fila. "Cancela" interrompe o trabalho atual.
+const CANCEL_RE = /^\s*(cancela|cancelar|cancele|para tudo|pare|para de|stop|cancel|abort)/i;
 async function runEdit(text) {
   text = (text || '').trim();
-  if (S.busy) return;
+  if (S.busy) {
+    if (CANCEL_RE.test(text)) { S.cancel = true; S.queue.length = 0; toast('Cancelando…'); $('#aiInput').value = ''; return; }
+    if (text) { S.queue.push(text); toast(`Na fila: "${text.slice(0, 40)}". Faço assim que terminar.`, 3500); $('#aiInput').value = ''; }
+    return;
+  }
+  if (CANCEL_RE.test(text) && text.split(/\s+/).length <= 3) { toast('Não tem nada rodando para cancelar.'); $('#aiInput').value = ''; return; }
+  try { await runEditNow(text); }
+  finally { if (S.queue.length && !S.busy) { const next = S.queue.shift(); setTimeout(() => runEdit(next), 60); } }
+}
+async function runEditNow(text) {
   if (!footage().length) { toast('Primeiro adicione vídeos, fotos ou uma narração.'); $('#fileIn').click(); return; }
   const prev = curV() ? curV().spec : null;
   const nt = text.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -222,11 +237,12 @@ async function buildAndShow(spec, { label, request, reply = null, seed = 1, repl
   for (const s of [...footage(), ...(S.ref ? [S.ref] : [])]) if (!S.items.has(s.id)) st.push(['a_' + s.id, `Assistindo "${s.name}"`]);
   if (S.music && !S.musicA) st.push(['m', `Achando as batidas de "${S.music.name}"`]);
   st.push(['p', 'Montando a edição'], ['x', 'Mixando o som']);
-  setBusy(true, st);
+  setBusy(true, st); S.cancel = false;
+  const checkCancel = () => { if (S.cancel) { const e = new Error('cancelado'); e.cancelled = true; throw e; } };
   try {
-    await analyzeAll(ev => { if (ev.stage === 'music') stage('m', 'run', ev.p); else if (ev.src) stage('a_' + ev.src.id, 'run', ev.stage === 'audio' ? 0.05 : 0.05 + 0.95 * (ev.p || 0)); });
+    await analyzeAll(ev => { checkCancel(); if (ev.stage === 'music') stage('m', 'run', ev.p); else if (ev.src) stage('a_' + ev.src.id, 'run', ev.stage === 'audio' ? 0.05 : 0.05 + 0.95 * (ev.p || 0)); });
     for (const [k] of st) if (k.startsWith('a_') || k === 'm') stage(k, 'done');
-    stage('p', 'run'); await sleep(16);
+    checkCancel(); stage('p', 'run'); await sleep(16);
     const music = spec.music.none ? null : S.musicA;
     const variants = makeVariants(spec, seed);
     const made = [];
@@ -234,7 +250,7 @@ async function buildAndShow(spec, { label, request, reply = null, seed = 1, repl
       const plan = buildPlan({ spec: v.spec, items: itemsNow(), music, outputIndex: oi, seed: v.seed, transcript: S.transcript });
       made.push({ id: uid('v'), label: (variants.length > 1 ? v.label : label) + (v.spec.outputs.length > 1 ? ' · ' + PLATFORMS[v.spec.outputs[oi].platform].label : ''), spec: v.spec, outIdx: oi, seed: v.seed, plan, at: Date.now(), request, reply });
     }
-    stage('p', 'done');
+    checkCancel(); stage('p', 'done');
     if (replaceIfSame && curV() && curV().label === label && Date.now() - curV().at < 15000 && made.length === 1) S.versions.splice(S.cur, 1, made[0]);
     else { S.versions = S.versions.slice(0, S.cur + 1); S.versions.push(...made); S.cur = S.versions.length - made.length; }
     stage('x', 'run');
@@ -242,7 +258,7 @@ async function buildAndShow(spec, { label, request, reply = null, seed = 1, repl
     stage('x', 'done');
     autosave();
     return true;
-  } catch (e) { console.error(e); toast('Deu erro: ' + (e.message || e), 6000); for (const li of document.querySelectorAll('#stages li.run')) li.className = 'err'; await sleep(1500); return false; }
+  } catch (e) { if (e.cancelled) { toast('Cancelado. A edição anterior continua igual.'); return false; } console.error(e); toast('Deu erro: ' + (e.message || e), 6000); for (const li of document.querySelectorAll('#stages li.run')) li.className = 'err'; await sleep(1500); return false; }
   finally { setBusy(false); }
 }
 function makeVariants(spec, seed) {
@@ -264,7 +280,8 @@ async function showVersion(i, withBusyFlag = true) {
     if (S.renderer) S.renderer.dispose();
     const plan = v.plan;
     const scale = Math.min(1, 720 / Math.max(plan.fmt.w, plan.fmt.h));
-    const rd = new Renderer({ plan, getSrc, canvas: $('#preview'), scale });
+    if (!S.comp) S.comp = new Compositor($('#preview'), { preserve: false });
+    const rd = new Renderer({ plan, getSrc, canvas: $('#preview'), scale, compositor: S.comp, overlayCanvas: $('#overlay'), videoPool: S.vpool, mixCache: S.mixCache });
     S.renderer = rd;
     const mix = await rd.prepare();
     v.mixStats = mix.stats;
@@ -311,7 +328,7 @@ function renderAll() {
   if ($('#editor').hidden) return;
   const p = curPlan();
   $('#emptyState').hidden = !!p;
-  $('#preview').style.visibility = p ? 'visible' : 'hidden';
+  $('#preview').style.visibility = p ? 'visible' : 'hidden'; $('#overlay').style.visibility = p ? 'visible' : 'hidden';
   const em = $('#emptyMedia'); em.innerHTML = '';
   for (const s of S.sources) em.append(s.thumb ? el('img', { src: s.thumb, alt: s.name }) : el('div', { class: 'add', html: icon(s.role === 'voice' ? 'voice' : 'media') }));
   if (S.music) em.append(el('div', { class: 'add', title: S.music.name, html: icon('music') }));
@@ -323,7 +340,9 @@ function renderAll() {
   $('#tcTotal').textContent = tc(p ? p.duration : 0);
   renderTimeline(); renderToolbar(); positionSafe();
 }
-function positionSafe() { const p = curPlan(), g = $('#safeGuide'), c = $('#preview'); if (!p) return; const s = p.fmt.safe; const r = c.getBoundingClientRect(), pr = $('#player').getBoundingClientRect(); g.style.left = (r.left - pr.left + s.left * r.width) + 'px'; g.style.width = r.width * (1 - s.left - s.right) + 'px'; g.style.top = (r.top - pr.top + s.top * r.height) + 'px'; g.style.height = r.height * (1 - s.top - s.bottom) + 'px'; }
+// a camada de textos fica exatamente em cima da imagem
+function placeOverlay() { const c = $('#preview'), o = $('#overlay'); if (!c || !o) return; const r = c.getBoundingClientRect(), pr = $('#player').getBoundingClientRect(); Object.assign(o.style, { left: (r.left - pr.left) + 'px', top: (r.top - pr.top) + 'px', width: r.width + 'px', height: r.height + 'px', borderRadius: getComputedStyle(c).borderRadius, visibility: c.style.visibility || 'visible' }); }
+function positionSafe() { const p = curPlan(), g = $('#safeGuide'), c = $('#preview'); placeOverlay(); if (!p) return; const s = p.fmt.safe; const r = c.getBoundingClientRect(), pr = $('#player').getBoundingClientRect(); g.style.left = (r.left - pr.left + s.left * r.width) + 'px'; g.style.width = r.width * (1 - s.left - s.right) + 'px'; g.style.top = (r.top - pr.top + s.top * r.height) + 'px'; g.style.height = r.height * (1 - s.top - s.bottom) + 'px'; }
 function thumbForSeg(seg) {
   const it = S.items.get(seg.srcId); if (!it || !it.video) { const s = getSrc(seg.srcId); return s && s.thumb; }
   const sh = it.video.shots.find(s => seg.in >= s.start - 0.01 && seg.in < s.end) || it.video.shots[0];
@@ -763,6 +782,7 @@ function autosave() {
   }, 700);
 }
 async function openProject(id) {
+  releaseMedia();
   const p = await store.getProject(id); if (!p) return;
   newProject();
   S.project = { id: p.id, name: p.name, createdAt: p.createdAt };

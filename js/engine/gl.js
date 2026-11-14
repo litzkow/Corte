@@ -117,9 +117,9 @@ void main(){
 export const TRANS_ID = { cut: 0, dissolve: 1, dip: 2, flash: 3, whip: 4, zoom: 5, glitch: 6 };
 
 export class Compositor {
-  constructor(canvas) {
+  constructor(canvas, { preserve = true } = {}) {
     this.canvas = canvas;
-    const gl = canvas.getContext('webgl2', { preserveDrawingBuffer: true, premultipliedAlpha: false, antialias: false });
+    const gl = canvas.getContext('webgl2', { preserveDrawingBuffer: preserve, premultipliedAlpha: false, antialias: false });
     if (!gl) throw new Error('Este aparelho não tem WebGL2. Atualize o navegador.');
     this.gl = gl;
     const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
@@ -136,6 +136,8 @@ export class Compositor {
     gl.uniform1i(this.u.uA, 0); gl.uniform1i(this.u.uB, 1);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
   }
+  // libera a placa de vídeo na hora (cada contexto WebGL esquecido pesa e o navegador só aceita uns 16)
+  dispose() { try { const ext = this.gl.getExtension('WEBGL_lose_context'); ext && ext.loseContext(); } catch (e) {} this.gl = null; }
   mkTex(unit) {
     const gl = this.gl, t = gl.createTexture();
     gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t);

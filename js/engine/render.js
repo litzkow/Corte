@@ -63,19 +63,73 @@ function focusAt(seg, sT) {
   return p[p.length - 1];
 }
 
+function waitFrame(v, ms) {
+  return new Promise(res => {
+    const evs = ['seeked', 'loadeddata', 'canplay', 'error'];
+    const done = () => { clearTimeout(to); clearInterval(iv); evs.forEach(e => v.removeEventListener(e, check)); res(); };
+    const check = () => { if (!v.seeking && v.readyState >= 2) done(); };
+    evs.forEach(e => v.addEventListener(e, check));
+    const iv = setInterval(check, 30); const to = setTimeout(done, ms);
+    check();
+  });
+}
+function makeVideoEl(url) {
+  const v = document.createElement('video');
+  v.muted = true; v.playsInline = true; v.preload = 'auto'; v.crossOrigin = 'anonymous'; v.src = url;
+  v.setAttribute('playsinline', ''); v.setAttribute('muted', '');
+  return v;
+}
+// Conjunto de elementos de vídeo reaproveitados entre edições: criar e carregar vídeos de novo a cada mudança
+// é lento e, no iPhone, gasta memória até o navegador travar.
+export class VideoPool {
+  constructor() { this.free = new Map(); }
+  borrow(id, url, n) {
+    const list = this.free.get(id) || []; const out = [];
+    while (out.length < n && list.length) { const v = list.pop(); if (v.src === url || v.currentSrc === url) out.push(v); else { v.removeAttribute('src'); v.load(); } }
+    while (out.length < n) out.push(makeVideoEl(url));
+    this.free.set(id, list); return out;
+  }
+  giveBack(id, vids) { const list = this.free.get(id) || []; for (const v of vids) { v.pause(); list.push(v); } while (list.length > 4) { const v = list.shift(); v.removeAttribute('src'); v.load(); } this.free.set(id, list); }
+  forget(id) { for (const v of this.free.get(id) || []) { v.removeAttribute('src'); v.load(); } this.free.delete(id); }
+  clear() { for (const id of [...this.free.keys()]) this.forget(id); }
+}
+// Chave do que muda o som: se for igual, a mixagem anterior serve.
+export function audioKey(plan) { return JSON.stringify([Math.round(plan.duration * 1000), plan.audio]); }
+export class MixCache {
+  // guarda poucas mixagens e limita a memória (uns 120 MB): som de vídeo longo é pesado
+  constructor(n = 3, maxBytes = 120e6) { this.n = n; this.maxBytes = maxBytes; this.m = new Map(); }
+  get(k) { const v = this.m.get(k); if (v) { this.m.delete(k); this.m.set(k, v); } return v; }
+  bytes() { let b = 0; for (const v of this.m.values()) b += v.buffer ? v.buffer.length * v.buffer.numberOfChannels * 4 : 0; return b; }
+  set(k, v) { this.m.set(k, v); while (this.m.size > 1 && (this.m.size > this.n || this.bytes() > this.maxBytes)) this.m.delete(this.m.keys().next().value); }
+  clear() { this.m.clear(); }
+}
+
 export const RECORD_TYPES = ['video/mp4;codecs=avc1.640028,mp4a.40.2', 'video/mp4;codecs=avc1.4d002a,mp4a.40.2', 'video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4;codecs=avc1,opus', 'video/mp4', 'video/webm;codecs=h264,opus', 'video/webm;codecs=vp9,opus', 'video/webm'];
 export function pickRecordType() { return RECORD_TYPES.find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || ''; }
 
 export class Renderer {
-  constructor({ plan, getSrc, canvas, scale = 1, overlays = null }) {
+  // Dois modos:
+  //  - prévia (compositor + overlayCanvas): o WebGL desenha direto na tela e os textos numa camada por cima.
+  //    Nada é copiado da placa de vídeo para a memória a cada quadro, e o contexto WebGL é reaproveitado entre edições.
+  //  - exportação (sem compositor): cria o próprio WebGL fora da tela e junta tudo num canvas 2D para gravar.
+  constructor({ plan, getSrc, canvas, scale = 1, overlays = null, compositor = null, overlayCanvas = null, videoPool = null, mixCache = null }) {
     this.plan = plan; this.getSrc = getSrc; this.out = canvas; this.scale = scale; this.overlays = overlays || new Overlays(plan);
     this.overlays.subjectAt = () => this._subj || null;
     const W = Math.round(plan.fmt.w * scale / 2) * 2, H = Math.round(plan.fmt.h * scale / 2) * 2;
     this.W = W; this.H = H;
-    canvas.width = W; canvas.height = H;
-    this.glCanvas = document.createElement('canvas'); this.glCanvas.width = W; this.glCanvas.height = H;
-    this.comp = new Compositor(this.glCanvas);
-    this.ctx = canvas.getContext('2d');
+    this.live = !!compositor;
+    if (this.live) {
+      this.comp = compositor; this.glCanvas = compositor.canvas;
+      if (this.glCanvas.width !== W || this.glCanvas.height !== H) { this.glCanvas.width = W; this.glCanvas.height = H; }
+      this.ovCanvas = overlayCanvas; overlayCanvas.width = W; overlayCanvas.height = H;
+      this.ctx = overlayCanvas.getContext('2d');
+    } else {
+      canvas.width = W; canvas.height = H;
+      this.glCanvas = document.createElement('canvas'); this.glCanvas.width = W; this.glCanvas.height = H;
+      this.comp = new Compositor(this.glCanvas); this.ownComp = true;
+      this.ctx = canvas.getContext('2d');
+    }
+    this.videoPool = videoPool; this.mixCache = mixCache;
     this.segs = visualSegments(plan);
     this.pools = new Map(); this.assign = new Map();
     this.stats = { frames: 0, frozen: 0, resyncs: 0, lateMs: 0 };
@@ -85,24 +139,24 @@ export class Renderer {
 
   async prepare(onProgress = () => {}) {
     await ensureFonts(this.overlays.fontsUsed ? this.overlays.fontsUsed() : []);
-    // vídeos: 3 elementos por fonte (corte atual, próximo e transição)
+    // vídeos: 2 a 3 elementos por fonte (corte atual, próximo e transição); na prévia vêm de um conjunto reaproveitado
     const ids = [...new Set(this.segs.map(s => s.srcId))];
     for (const id of ids) {
       const src = this.getSrc(id);
       if (src.kind === 'image') { this.pools.set(id, [{ el: src.img, seg: null, still: true }, { el: src.img, seg: null, still: true }, { el: src.img, seg: null, still: true }]); continue; }
-      const els = [];
-      const need = Math.min(4, 1 + this.segs.filter(s => s.srcId === id).length);
-      for (let i = 0; i < Math.max(2, Math.min(3, need)); i++) {
-        const v = document.createElement('video');
-        v.muted = true; v.playsInline = true; v.preload = 'auto'; v.crossOrigin = 'anonymous'; v.src = src.url;
-        v.setAttribute('playsinline', ''); v.setAttribute('muted', '');
-        els.push({ el: v, seg: null });
-      }
-      this.pools.set(id, els);
+      const need = Math.max(2, Math.min(3, 1 + this.segs.filter(s => s.srcId === id).length));
+      const els = this.videoPool ? this.videoPool.borrow(id, src.url, need) : Array.from({ length: need }, () => makeVideoEl(src.url));
+      this.pools.set(id, els.map(el => ({ el, seg: null })));
     }
     await Promise.all([...this.pools.values()].flat().filter(x => !x.still).map(x => new Promise(res => { if (x.el.readyState >= 2) return res(); x.el.addEventListener('loadeddata', res, { once: true }); x.el.addEventListener('error', res, { once: true }); setTimeout(res, 15000); })));
     onProgress(0.3, 'Mixando o som');
-    const mix = await renderMix(this.plan, this.getSrc, { onProgress: p => onProgress(0.3 + p * 0.6, 'Mixando o som') });
+    // o som só é refeito quando algo do áudio mudou (legenda, cor ou texto não refazem a mixagem)
+    const key = audioKey(this.plan);
+    let mix = this.mixCache && this.mixCache.get(key);
+    if (!mix) {
+      mix = await renderMix(this.plan, this.getSrc, { onProgress: p => onProgress(0.3 + p * 0.6, 'Mixando o som') });
+      if (this.mixCache) this.mixCache.set(key, mix);
+    }
     this.mix = mix;
     onProgress(1, 'Pronto');
     return mix;
@@ -110,8 +164,13 @@ export class Renderer {
 
   dispose() {
     this.stop();
-    for (const arr of this.pools.values()) for (const x of arr) { if (x.still) continue; x.el.pause(); x.el.removeAttribute('src'); x.el.load(); }
-    this.pools.clear();
+    for (const [id, arr] of this.pools) {
+      const vids = arr.filter(x => !x.still).map(x => x.el);
+      if (this.videoPool) this.videoPool.giveBack(id, vids);
+      else for (const v of vids) { v.pause(); v.removeAttribute('src'); v.load(); }
+    }
+    this.pools.clear(); this.assign.clear();
+    if (this.ownComp) { this.comp.dispose(); this.comp = null; }
   }
 
   // ----- agenda de vídeos -----
@@ -221,7 +280,9 @@ export class Renderer {
       this.comp.draw({ A: A.ready ? A : { ...A, el: null }, B: B && B.ready ? B : (B ? { ...B, el: null } : null), mix, trans, shake, flash, look: plan.look.id, intensity: plan.look.intensity, grainOver: plan.look.grain, letterbox: lb, leak: plan.lightLeak * (trans !== 'cut' ? 1 - Math.abs(mix - 0.5) * 2 : 0.15), time: t, skin: 1, adjust: plan.adjust, mirror: plan.mirror });
     }
     const c = this.ctx;
-    c.globalAlpha = 1; c.drawImage(this.glCanvas, 0, 0);
+    c.globalAlpha = 1;
+    if (this.live) c.clearRect(0, 0, this.W, this.H);   // prévia: só a camada de textos é redesenhada
+    else c.drawImage(this.glCanvas, 0, 0);             // exportação: junta imagem e textos num quadro só
     if (fadeOut < 1 || fadeIn < 1) { c.fillStyle = `rgba(0,0,0,${1 - Math.min(fadeOut, fadeIn)})`; c.fillRect(0, 0, this.W, this.H); }
     if (this.overlays) this.overlays.draw(c, t, this.W, this.H);
     this.stats.frames++;
@@ -237,8 +298,9 @@ export class Renderer {
       if (!a || a.still) continue;
       const want = srcTime(s, t);
       a.el.pause();
-      if (Math.abs(a.el.currentTime - want) > 0.01) { a.el.currentTime = want; await new Promise(r => { a.el.addEventListener('seeked', r, { once: true }); setTimeout(r, 4000); }); }
-      if (a.el.readyState < 2) await new Promise(r => { a.el.addEventListener('loadeddata', r, { once: true }); setTimeout(r, 3000); });
+      if (Math.abs(a.el.currentTime - want) > 0.01) a.el.currentTime = want;
+      // espera a busca terminar (vários eventos servem; um vídeo já carregado não dispara "loadeddata" de novo)
+      if (a.el.seeking || a.el.readyState < 2) await waitFrame(a.el, 4000);
     }
     this.drawAt(t);
   }
