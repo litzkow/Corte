@@ -1,0 +1,31 @@
+<!doctype html><meta charset=utf-8><body style="margin:0;background:#111"><canvas id=c style="width:270px"></canvas><script type=module>
+import { loadSource } from '../js/engine/media.js';
+import { analyzeSource, analyzeMusicSource } from '../js/engine/pipeline.js';
+import { interpret } from '../js/engine/director.js';
+import { buildPlan } from '../js/engine/planner.js';
+import { Renderer } from '../js/engine/render.js';
+import { alignScript } from '../js/engine/transcribe.js';
+const r = window.__r = {};
+const q = new URLSearchParams(location.search);
+try {
+  const talk = await loadSource('/media/talk.mp4'), broll = await loadSource('/media/broll.mp4'), mus = await loadSource('/media/music_clip.mp4', { role: 'music' });
+  const srcs = { [talk.id]: talk, [broll.id]: broll, [mus.id]: mus };
+  const it1 = await analyzeSource(talk), it2 = await analyzeSource(broll); const m = await analyzeMusicSource(mus);
+  const cmd = q.get('cmd') || 'trailer de ação de 12 segundos para o tiktok com efeitos sonoros';
+  const items = q.get('talk') ? [it1, it2] : [it2];
+  const script = 'Hoje eu vou te contar a história do maior império que já existiu. Ninguém te conta isso na escola. Em apenas trinta anos ele dominou metade do mundo conhecido. O segredo não era o exército. Era a estrada. Cada estrada levava notícias, dinheiro e soldados mais rápido que qualquer inimigo. E foi exatamente isso que destruiu tudo no final. Siga para a parte dois.';
+  const transcript = { [talk.id]: { words: alignScript(script, it1.audio.speech) } };
+  const plan = buildPlan({ spec: interpret(cmd).spec, items, music: m, transcript });
+  r.ncap = plan.captions.length;
+  r.plan = { dur: plan.duration, clips: plan.clips.length, look: plan.look, decisions: plan.decisions };
+  const rd = new Renderer({ plan, getSrc: id => srcs[id], canvas: document.getElementById('c'), scale: +(q.get('scale') || 0.5) });
+  await rd.prepare();
+  const t0 = performance.now();
+  const res = q.get('rt') ? await rd.export({ onProgress: p => { r.p = p; } }) : await rd.exportPrecise({ onProgress: (p, x) => { r.p = p; r.x = x; } });
+  r.exportMs = Math.round(performance.now() - t0); r.type = res.type; r.size = res.blob.size; r.stats = res.stats; r.W = rd.W; r.H = rd.H;
+  const ab = new Uint8Array(await res.blob.arrayBuffer());
+  window.__blob = Array.from(ab);
+  r.cuts = plan.clips.map(c => +c.start.toFixed(2));
+} catch (e) { r.error = String(e.stack || e); }
+window.__done = true;
+</script>

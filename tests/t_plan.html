@@ -1,0 +1,21 @@
+<!doctype html><meta charset=utf-8><script type=module>
+import { loadSource } from '../js/engine/media.js';
+import { analyzeSource, analyzeMusicSource } from '../js/engine/pipeline.js';
+import { interpret } from '../js/engine/director.js';
+import { buildPlan } from '../js/engine/planner.js';
+const r = window.__r = {};
+try {
+  const talk = await loadSource('/media/talk.mp4'), broll = await loadSource('/media/broll.mp4'), mus = await loadSource('/media/music_clip.mp4', { role: 'music' });
+  const it1 = await analyzeSource(talk), it2 = await analyzeSource(broll); const m = await analyzeMusicSource(mus);
+  const sum = p => ({ dur: +p.duration.toFixed(2), n: p.clips.length, decisions: p.decisions, warnings: p.warnings,
+     clips: p.clips.map(c => `${c.kind[0]} ${c.srcId===talk.id?'T':'B'} ${c.in.toFixed(2)}-${c.out.toFixed(2)} @${c.start.toFixed(2)} d${c.dur.toFixed(2)} x${c.speed} ${c.trans.type}${c.cover?' COVER':''} z${c.zoom.map(v=>v.toFixed(2))}`),
+     sfx: p.audio.sfx.map(s => `${s.kind}@${s.t.toFixed(2)}`), music: p.audio.music && { in: p.audio.music.in, lvl: p.audio.music.levelDb, duck: p.audio.music.duck.length }, fx: p.fx.length, fmt: p.fmt.w+'x'+p.fmt.h });
+  let s1 = interpret('reels de 30 segundos estilo podcast, tira os silêncios, legenda palavra por palavra').spec;
+  r.talk = sum(buildPlan({ spec: s1, items: [it1, it2], music: m }));
+  let s2 = interpret('trailer de ação de 20 segundos para o tiktok com efeitos sonoros e 3 impactos').spec;
+  r.action = sum(buildPlan({ spec: s2, items: [it2], music: m }));
+  let s3 = interpret('vídeo cinematográfico emocionante de 25 segundos para o youtube com final emocionante').spec;
+  r.cine = sum(buildPlan({ spec: s3, items: [it2], music: m }));
+} catch (e) { r.error = String(e.stack || e); }
+window.__done = true;
+</script>

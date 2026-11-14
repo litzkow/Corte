@@ -1,0 +1,31 @@
+<!doctype html><meta charset=utf-8><script type=module>
+import { loadSource, decodeAudio, mixToMono } from '../js/engine/media.js';
+import { analyzeSpeech, analyzeMusic } from '../js/engine/analyze-audio.js';
+const r = window.__r = {};
+try {
+  const truth = await (await fetch('/media/truth.json')).json();
+  const talk = await loadSource('/media/talk.mp4');
+  r.talkMeta = talk;
+  let t0 = performance.now();
+  const ab = await decodeAudio(talk, 16000, 1);
+  const sp = analyzeSpeech(mixToMono(ab), 16000);
+  r.talkMs = Math.round(performance.now() - t0);
+  r.silences = sp.silences.map(s => [+s.start.toFixed(2), +s.end.toFixed(2)]);
+  r.truthPauses = truth.talk.segments.filter(s => s.type === 'pause').map(s => [s.start, s.end]);
+  r.floor = sp.floorDb; r.thr = sp.thrDb; r.speechRatio = sp.speechRatio;
+  const br = await loadSource('/media/broll.mp4');
+  const sb = analyzeSpeech(mixToMono(await decodeAudio(br, 16000, 1)), 16000);
+  r.brollEvents = sb.events.map(e => [+e.t.toFixed(2), +e.strength.toFixed(2)]);
+  const mu = await loadSource('/media/music_clip.mp4');
+  t0 = performance.now();
+  const ma = analyzeMusic(mixToMono(await decodeAudio(mu, 24000, 1)), 24000);
+  r.musicMs = Math.round(performance.now() - t0);
+  r.bpm = ma.bpm; r.conf = ma.confidence; r.beats = ma.beats.slice(0, 10).map(b => [+b.t.toFixed(3), b.downbeat]);
+  r.nbeats = ma.beats.length;
+  // erro médio contra a grade verdadeira (128 BPM começando em 0)
+  const P = 60 / 128; let err = 0;
+  for (const b of ma.beats) { const k = Math.round(b.t / P); err += Math.abs(b.t - k * P); }
+  r.beatErrMs = Math.round(1000 * err / ma.beats.length); r.dev = ma.beats.slice(0,40).map(b=>Math.round(1000*(b.t-Math.round(b.t/P)*P)));
+} catch (e) { r.error = String(e.stack || e); }
+window.__done = true;
+</script>

@@ -1,0 +1,24 @@
+<!doctype html><meta charset=utf-8><script type=module>
+import { loadSource } from '../js/engine/media.js';
+import { analyzeSource, analyzeMusicSource } from '../js/engine/pipeline.js';
+import { interpret } from '../js/engine/director.js';
+import { buildPlan } from '../js/engine/planner.js';
+import { renderMix } from '../js/engine/audio-mix.js';
+const r = window.__r = {};
+try {
+  const talk = await loadSource('/media/talk.mp4'), broll = await loadSource('/media/broll.mp4'), mus = await loadSource('/media/music_clip.mp4', { role: 'music' });
+  const srcs = { [talk.id]: talk, [broll.id]: broll, [mus.id]: mus };
+  const it1 = await analyzeSource(talk), it2 = await analyzeSource(broll); const m = await analyzeMusicSource(mus);
+  for (const [k, cmd, items] of [['talk','reels de 30 segundos estilo podcast, tira os silêncios', [it1, it2]], ['action','trailer de ação de 20 segundos para o tiktok com efeitos sonoros e 3 impactos', [it2]]]) {
+    const plan = buildPlan({ spec: interpret(cmd).spec, items, music: m });
+    const t0 = performance.now();
+    const mix = await renderMix(plan, id => srcs[id]);
+    // exporta wav para conferir no ffmpeg
+    const b = mix.buffer, n = b.length, data = new Int16Array(n * 2);
+    for (let i = 0; i < n; i++) { data[2*i] = Math.max(-1, Math.min(1, b.getChannelData(0)[i])) * 32767; data[2*i+1] = Math.max(-1, Math.min(1, b.getChannelData(1)[i])) * 32767; }
+    r[k] = { ms: Math.round(performance.now() - t0), dur: b.duration, stats: mix.stats, b64len: data.length };
+    window['__wav_' + k] = Array.from(new Uint8Array(data.buffer));
+  }
+} catch (e) { r.error = String(e.stack || e); }
+window.__done = true;
+</script>

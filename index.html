@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0E0D0C">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Corte">
+<meta name="corte-build" content="1">
+<title>Corte — editor de vídeo</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link id="gfonts" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Instrument+Serif:ital@0;1&display=swap">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<header class="top">
+  <button class="brand" id="btnHome" aria-label="Projetos">Corte<span>.</span></button>
+  <div class="top-actions">
+    <button class="ghost" id="btnProjects">Projetos</button>
+    <button class="ghost" id="btnStyles">Estilos</button>
+    <button class="ghost icon" id="btnSettings" aria-label="Ajustes"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Zm8.6-2.6.1-.9-.1-.9 2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-1.6-.9L16.2 3h-4l-.4 2.6c-.6.2-1.1.5-1.6.9l-2.4-1-2 3.4 2 1.6-.1.9.1.9-2 1.6 2 3.4 2.4-1c.5.4 1 .7 1.6.9l.4 2.6h4l.4-2.6c.6-.2 1.1-.5 1.6-.9l2.4 1 2-3.4-2-1.6Z"/></svg></button>
+  </div>
+</header>
+
+<main id="app">
+  <!-- 1. MATERIAL -->
+  <section class="card" id="secMedia">
+    <div class="sec-head"><span class="num">1</span><h2>Seus vídeos</h2><span class="hint" id="mediaHint">Pode mandar vários. Ficam só no seu aparelho.</span></div>
+    <label class="drop" id="drop" tabindex="0">
+      <input type="file" id="fileIn" accept="video/*,audio/*" multiple hidden>
+      <strong>Toque para escolher</strong><span>ou arraste os vídeos aqui</span>
+    </label>
+    <ul class="media" id="mediaList" aria-live="polite"></ul>
+    <div class="music-row" id="musicRow">
+      <div class="music-info"><span class="label">Música</span><span id="musicName" class="muted">Nenhuma escolhida</span></div>
+      <div class="music-actions">
+        <label class="btn small"><input type="file" id="musicIn" accept="audio/*,video/*" hidden>Escolher</label>
+        <button class="btn small ghost" id="btnMusicNone" hidden>Tirar</button>
+      </div>
+      <div class="music-start" id="musicStartRow" hidden>
+        <label for="musicStart">Começar a música em <b id="musicStartLbl">automático</b></label>
+        <input type="range" id="musicStart" min="-1" max="100" step="0.5" value="-1">
+      </div>
+      <p class="fine" id="musicNote" hidden>Música de artista conhecido pode ser silenciada ou reivindicada pelo Instagram, TikTok ou YouTube quando você postar.</p>
+    </div>
+  </section>
+
+  <!-- 2. PEDIDO -->
+  <section class="card" id="secAsk">
+    <div class="sec-head"><span class="num">2</span><h2>O que você quer?</h2><span class="hint">Fale ou escreva do seu jeito, em português ou inglês.</span></div>
+    <div class="ask">
+      <textarea id="prompt" rows="3" placeholder="Ex.: transforma num vídeo de ação de 1 minuto para o TikTok, cortes rápidos, música épica, legenda palavra por palavra"></textarea>
+      <div class="ask-bar">
+        <button class="mic" id="btnMic" aria-label="Falar o pedido"><span class="ring"></span><svg viewBox="0 0 24 24" width="26" height="26"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V5a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-3.1A7 7 0 0 0 19 11h-2Z"/></svg></button>
+        <div class="lang" role="group" aria-label="Idioma da voz"><button data-lang="pt-BR" class="on">PT</button><button data-lang="en-US">EN</button></div>
+        <button class="btn primary" id="btnGo">Editar</button>
+      </div>
+    </div>
+    <div class="chips-block">
+      <div class="chips-title">Formato</div>
+      <div class="chips" id="chipsFormat"></div>
+      <div class="chips-title">Estilo</div>
+      <div class="chips scroll" id="chipsStyle"></div>
+      <div class="chips-title">Legenda <button class="link" id="btnCapGallery">ver todas</button></div>
+      <div class="chips scroll" id="chipsCaption"></div>
+      <div class="chips-title">Texto com forma <button class="link" id="btnShapeAdd">adicionar</button></div>
+      <div class="chips" id="chipsShapes"></div>
+    </div>
+  </section>
+
+  <!-- 3. TRABALHANDO -->
+  <section class="card" id="secWork" hidden>
+    <div class="sec-head"><span class="num">3</span><h2 id="workTitle">Editando</h2></div>
+    <ol class="stages" id="stages"></ol>
+    <div class="understood" id="understood"></div>
+  </section>
+
+  <!-- 4. RESULTADO -->
+  <section class="card result" id="secResult" hidden>
+    <div class="sec-head"><span class="num">4</span><h2>Prévia</h2><span class="hint" id="resultMeta"></span></div>
+    <div class="versions" id="versions"></div>
+    <div class="player-wrap">
+      <div class="player" id="player"><canvas id="preview"></canvas><div class="safe" id="safeGuide" hidden></div><button class="bigplay" id="bigPlay" aria-label="Tocar">▶</button></div>
+      <div class="controls">
+        <button class="btn small" id="btnPlay">Tocar</button>
+        <input type="range" id="scrub" min="0" max="1000" value="0" aria-label="Posição">
+        <span class="tc" id="tc">00:00 / 00:00</span>
+        <button class="btn small ghost" id="btnSafe" title="Mostrar área segura">Área</button>
+      </div>
+    </div>
+    <div class="adjust">
+      <textarea id="adjust" rows="2" placeholder="Ajuste: &quot;gostei, mas deixa a música mais intensa e o final mais emocionante&quot;"></textarea>
+      <div class="ask-bar"><button class="mic small" id="btnMic2" aria-label="Falar o ajuste"><span class="ring"></span><svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V5a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-3.1A7 7 0 0 0 19 11h-2Z"/></svg></button>
+        <button class="btn ghost small" id="btnUndo">Desfazer</button>
+        <button class="btn" id="btnAdjust">Ajustar</button></div>
+    </div>
+    <div class="tabs" role="tablist">
+      <button role="tab" data-tab="did" class="on">O que fiz</button>
+      <button role="tab" data-tab="timeline">Linha do tempo</button>
+      <button role="tab" data-tab="captions">Legendas</button>
+      <button role="tab" data-tab="quality">Qualidade</button>
+    </div>
+    <div class="tabpane" id="tab-did"></div>
+    <div class="tabpane" id="tab-timeline" hidden></div>
+    <div class="tabpane" id="tab-captions" hidden></div>
+    <div class="tabpane" id="tab-quality" hidden></div>
+    <button class="btn primary wide" id="btnExport">Exportar vídeo</button>
+  </section>
+</main>
+
+<!-- folhas -->
+<div class="sheet" id="sheet" hidden><div class="sheet-body" role="dialog" aria-modal="true"><button class="sheet-x" id="sheetX" aria-label="Fechar">×</button><div id="sheetContent"></div></div></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

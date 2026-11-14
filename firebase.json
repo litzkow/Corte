@@ -1,0 +1,10 @@
+{
+  "hosting": {
+    "public": ".",
+    "ignore": ["firebase.json", ".firebaserc", "**/.*", "**/node_modules/**", "tests/**", "README.md", "LEIA-ME.md"],
+    "headers": [
+      { "source": "**/*.@(html|js|css|webmanifest)", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] },
+      { "source": "icons/**", "headers": [{ "key": "Cache-Control", "value": "public, max-age=604800" }] }
+    ]
+  }
+}

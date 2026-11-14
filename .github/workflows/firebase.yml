@@ -1,0 +1,19 @@
+# Publica no Firebase Hosting a cada envio para a main.
+# Precisa de dois segredos no repositório: FIREBASE_SERVICE_ACCOUNT (a chave JSON) e FIREBASE_PROJECT_ID.
+name: Publicar no Firebase
+# Desligado: hoje o app é publicado pelo GitHub Pages (pages.yml). Para usar o Firebase, rode à mão.
+on:
+  workflow_dispatch:
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Testes do diretor
+        run: node tests/director.test.mjs
+      - uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          projectId: ${{ secrets.FIREBASE_PROJECT_ID }}
+          channelId: live

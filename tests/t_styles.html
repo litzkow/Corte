@@ -1,0 +1,28 @@
+<!doctype html><meta charset=utf-8><body style="margin:0"><canvas id=c></canvas><script type=module>
+import { CAPTION_STYLES, drawCaption, groupWords, markEmphasis, drawShape, SHAPES, ensureFonts, FONTS } from '../js/engine/captions.js';
+const q = new URLSearchParams(location.search);
+const W = 360, H = 640, cols = q.get('shapes') ? 4 : 6;
+const ids = q.get('shapes') ? Object.keys(SHAPES) : Object.keys(CAPTION_STYLES);
+const rows = Math.ceil(ids.length / cols);
+const cv = document.getElementById('c'); cv.width = W * cols; cv.height = H * rows;
+const ctx = cv.getContext('2d');
+await ensureFonts(Object.keys(FONTS));
+const words = 'Esse é o segredo que ninguém te conta sobre dinheiro'.split(' ').map((w, i) => ({ w, t0: i * 0.35, t1: i * 0.35 + 0.3 }));
+ids.forEach((id, k) => {
+  const ox = (k % cols) * W, oy = Math.floor(k / cols) * H;
+  ctx.save(); ctx.translate(ox, oy);
+  const g = ctx.createLinearGradient(0, 0, W, H); g.addColorStop(0, '#2b3a55'); g.addColorStop(0.5, '#6b4b5e'); g.addColorStop(1, '#c47a4a'); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(255,220,190,.9)'; ctx.beginPath(); ctx.ellipse(W * 0.5, H * 0.36, 60, 78, 0, 0, 7); ctx.fill();
+  ctx.beginPath(); ctx.rect(0, 0, W, H); ctx.clip();
+  if (q.get('shapes')) {
+    drawShape(ctx, { shape: id, text: id === 'badge' ? 'SIGA PARA MAIS' : 'SIGA PARA MAIS', x: 0.5, y: id === 'arc' ? 0.2 : 0.45, size: 1, start: 0, dur: 10 }, 2.1, W, H, null);
+  } else {
+    const groups = groupWords(markEmphasis(words), id);
+    drawCaption(ctx, groups, 1.6, id, { x: W * 0.06, y: H * 0.12, w: W * 0.8, h: H * 0.66 }, H * 0.64, {});
+  }
+  ctx.restore();
+  ctx.fillStyle = '#000a'; ctx.fillRect(ox, oy, W, 26); ctx.fillStyle = '#fff'; ctx.font = '600 15px Inter'; ctx.fillText(id + ' — ' + (CAPTION_STYLES[id] || SHAPES[id]).label, ox + 8, oy + 18);
+});
+window.__r = { url: cv.toDataURL('image/png') };
+window.__done = true;
+</script>

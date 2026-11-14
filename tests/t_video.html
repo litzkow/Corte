@@ -1,0 +1,15 @@
+<!doctype html><meta charset=utf-8><script type=module>
+import { loadSource } from '../js/engine/media.js';
+import { analyzeVideo } from '../js/engine/analyze-video.js';
+const r = window.__r = {};
+try {
+  for (const name of ['broll', 'talk']) {
+    const s = await loadSource('/media/' + name + '.mp4');
+    const t0 = performance.now();
+    const a = await analyzeVideo(s);
+    r[name] = { n: a.samples.length, ms: Math.round(performance.now() - t0), step: a.step, cuts: a.cuts.map(c => +c.toFixed(3)),
+      shots: a.shots.map(x => ({ s: +x.start.toFixed(2), e: +x.end.toFixed(2), flags: x.flags, q: +x.quality.toFixed(2), int: +x.interest.toFixed(2), shake: +x.shake.toFixed(2), mot: +x.motion.toFixed(3), skin: +x.skin.toFixed(3), px: +(x.path.reduce((a,p)=>a+p.x,0)/x.path.length).toFixed(2) })) };
+  }
+} catch (e) { r.error = String(e.stack || e); }
+window.__done = true;
+</script>

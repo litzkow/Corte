@@ -1,0 +1,32 @@
+// node tests/director.test.mjs — o diretor tem que continuar entendendo estes pedidos
+import { interpret, resolveStyle } from '../js/engine/director.js';
+let pass = 0, fail = 0;
+const t = (cmd, check, prev = null) => { const r = interpret(cmd, prev); const e = resolveStyle(r.spec); let ok; try { ok = check(r.spec, e, r); } catch (x) { ok = false; } if (ok) pass++; else { fail++; console.log('FALHOU:', cmd, '\n  ', r.said.join(' | ')); } return r.spec; };
+t('Transforma isso num vídeo de ação de aproximadamente 2 minutos. Quero cortes rápidos, média de 1,2 segundo, músicas épicas, efeitos sonoros nos momentos de impacto, color grading cinematográfico, transições profissionais e uma abertura que prenda a atenção nos primeiros 3 segundos.',
+  (s, e) => s.mix.length === 1 && s.mix[0].id === 'action' && Math.abs(e.pacing.avgShot - 1.2) < 1e-6 && s.target.seconds === 120 && s.hookSeconds === 3 && s.music.mood === 'epic' && e.color.look === 'hollywood' && e.sfx.onImpacts);
+t('Create a 15-second TikTok, a 60-second Reel, and a 10-minute YouTube version.', s => s.outputs.map(o => o.platform + o.duration).join() === 'tiktok15,reels60,youtube600');
+t('Give me 70% cinematic documentary and 30% action trailer.', s => Math.abs(s.mix.reduce((a, m) => a + m.w, 0) - 1) < 1e-6 && s.mix.some(m => m.id === 'documentary'));
+t('Remove silence longer than 1.5 seconds.', (s, e) => e.silence.remove && e.silence.minLen === 1.5);
+t('Use 15% slow motion.', (s, e) => Math.abs(e.effects.slowmo - 0.15) < 1e-6);
+t('Increase music intensity by 20%.', s => Math.abs(s.music.intensity - 0.2) < 1e-6);
+t('Add three dramatic impacts.', s => s.sfxRequests[0].kind === 'impact' && s.sfxRequests[0].count === 3);
+t('Remove the transition at 00:32.', s => s.ops[0].op === 'removeTransition' && s.ops[0].t === 32);
+t('Export in 4K at 30 FPS.', s => s.export.resolution === '4k' && s.export.fps === 30);
+t('Turn this 40-minute recording into a compelling 60-second video.', s => s.target.seconds === 60);
+t('Make this 45 minutes of footage into a 90-second highlight reel.', s => s.target.seconds === 90 && s.outputs[0].platform === 'reels' && s.outputs[0].duration == null);
+t('Keep the average shot length between 2 and 3 seconds.', (s, e) => e.pacing.avgShot === 2.5);
+t('Actually, slow down the first 10 seconds.', s => s.sections[0].pace === 'slow' && s.sections[0].to === 10);
+t('Make the final 5 seconds emotional.', s => s.sections[0].from === -5 && s.mix[0].id === 'social');
+t('Show me three different versions.', s => s.versions === 3);
+t('Keep the original English audio but add Portuguese subtitles.', s => s.captions.translate === 'pt' && s.audio.keepDialogue);
+t('usa a música deste vídeo', s => s.music.fromVideo);
+t('Faz um reels de 30 segundos com legenda palavra por palavra e texto em círculo "SIGA PARA MAIS"', s => s.captions.style === 'hormozi' && s.texts[0].shape === 'circle' && s.texts[0].text === 'SIGA PARA MAIS' && s.outputs[0].duration === 30);
+t('texto em volta do rosto em círculo "INSCREVA-SE"', s => s.texts[0].follow === true);
+t('quero um vídeo de viagem cinematográfico de 1 minuto e meio para o youtube shorts', s => s.outputs[0].platform === 'shorts' && s.outputs[0].duration === 90);
+const base = interpret('reels estilo podcast').spec;
+t('corta mais rápido', (s, e) => e.pacing.avgShot < resolveStyle(base).pacing.avgShot, base);
+t('Gostei, mas deixa a música mais intensa e o final mais emocionante.', s => s.music.intensity > 0 && s.sections.some(x => x.from < 0) && s.mix[0].id === 'podcast', base);
+t('sem música e sem legenda', s => s.music.none && s.captions.enabled === false);
+t('Make the pacing slower during emotional moments and faster during exciting moments.', (s, e) => e.pacing.emotionAware && !s.over.pacing.avgShot);
+console.log(`diretor: ${pass} ok, ${fail} falhas`);
+process.exit(fail ? 1 : 0);
