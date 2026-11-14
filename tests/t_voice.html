@@ -1,0 +1,29 @@
+<!doctype html><meta charset=utf-8><body style="margin:0"><canvas id=c></canvas><script type=module>
+import { loadSource } from '../js/engine/media.js';
+import { analyzeSource, analyzeMusicSource } from '../js/engine/pipeline.js';
+import { interpret } from '../js/engine/director.js';
+import { buildPlan } from '../js/engine/planner.js';
+import { Renderer } from '../js/engine/render.js';
+const r = window.__r = {};
+try {
+  const srcs = {};
+  const voice = await loadSource('/media/narracao.m4a'); srcs[voice.id] = voice;
+  const fotos = [];
+  for (let i = 1; i <= 5; i++) { const f = await loadSource('/media/foto' + i + '.jpg'); srcs[f.id] = f; fotos.push(f); }
+  const broll = await loadSource('/media/broll.mp4'); srcs[broll.id] = broll;
+  const mus = await loadSource('/media/music_clip.mp4', { role: 'music' }); srcs[mus.id] = mus;
+  const items = [];
+  for (const s of [voice, ...fotos, broll]) items.push(await analyzeSource(s));
+  const m = await analyzeMusicSource(mus);
+  r.voiceSpeech = items[0].audio.speechRatio;
+  const plan = buildPlan({ spec: interpret('documentário para o youtube, tira os silêncios').spec, items, music: m });
+  r.decisions = plan.decisions; r.warnings = plan.warnings; r.dur = plan.duration;
+  r.clips = plan.clips.map(c => `${c.kind} ${c.start.toFixed(1)} d${c.dur.toFixed(1)} covers:${(c.covers||[]).map(x => (srcs[x.srcId].name)+'@'+x.offset.toFixed(1)+'+'+x.len.toFixed(1)+(x.trans?':'+x.trans.type:'')).join(',')}`);
+  const rd = new Renderer({ plan, getSrc: id => srcs[id], canvas: document.getElementById('c'), scale: 0.25 });
+  await rd.prepare();
+  const frames = [];
+  for (const t of [0.5, 3, 6, 9, 12, 15, 18, 21]) { await rd.frameAt(Math.min(t, plan.duration - 0.1)); frames.push(document.getElementById('c').toDataURL('image/jpeg', 0.7)); }
+  r.frames = frames.length; window.__frames = frames;
+} catch (e) { r.error = String(e.stack || e); }
+window.__done = true;
+</script>

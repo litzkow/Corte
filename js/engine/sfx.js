@@ -105,6 +105,11 @@ const GEN = {
     for (let i = 0; i < L.length; i++) { const t = i / SR; const v = (Math.sin(2 * Math.PI * 1318 * t) + 0.5 * Math.sin(2 * Math.PI * 2637 * t) + 0.25 * Math.sin(2 * Math.PI * 3951 * t)) * Math.exp(-t / 0.25) * 0.3; L[i] = v; R[i] = v; }
     return b;
   },
+  beep(ctx) {
+    const d = 1.5, b = buf(ctx, d), L = b.getChannelData(0), R = b.getChannelData(1);
+    for (let i = 0; i < L.length; i++) { const t = i / SR; const v = Math.sin(2 * Math.PI * 1000 * t) * 0.32 * Math.min(1, t / 0.005); L[i] = v; R[i] = v; }
+    return b;
+  },
   glitch(ctx, rng) {
     const d = 0.35, b = buf(ctx, d), L = b.getChannelData(0), R = b.getChannelData(1);
     let hold = 0, val = 0;
@@ -116,7 +121,7 @@ const GEN = {
 export const SFX_KINDS = Object.keys(GEN);
 
 // Onde o "ponto" do som cai (o riser termina no corte, o whoosh tem o meio no corte).
-export const SFX_ANCHOR = { whoosh: 0.32, riser: 1.62, impact: 0, hit: 0, boom: 0, pop: 0, click: 0, ding: 0, glitch: 0 };
+export const SFX_ANCHOR = { whoosh: 0.32, riser: 1.62, impact: 0, hit: 0, boom: 0, pop: 0, click: 0, ding: 0, glitch: 0, beep: 0 };
 
 export function makeSfx(ctx, kind, variant = 0) {
   const key = kind + ':' + variant;

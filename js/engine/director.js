@@ -4,6 +4,7 @@
 import { PRESETS, LOOKS, blendPresets } from './styles.js';
 import { PLATFORMS } from './platforms.js';
 import { deepClone, clamp } from './util.js';
+import { canon, TOPIC_STYLE, findRanges, findPoint, suggest } from './nlu.js';
 
 export function newSpec() {
   return {
@@ -35,6 +36,7 @@ export function norm(text) {
   s = s.replace(/(\d),(\d)/g, '$1.$2');
   s = s.replace(/\bum minuto e meio\b|\bone and a half minutes?\b|\ba minute and a half\b/g, '90 segundos');
   s = s.replace(/\bmeio minuto\b|\bhalf a minute\b/g, '30 segundos');
+  s = s.replace(/\bminuto e meio\b/g, '90 segundos').replace(/\bmeio segundo\b|\bhalf a second\b/g, '0.5 segundo');
   s = s.replace(/\b(\d+) minutos? e meio\b/g, (_, n) => `${+n * 60 + 30} segundos`);
   s = s.replace(/\b(zero|um|uma|one|dois|duas|two|tres|three|quatro|four|cinco|five|seis|six|sete|seven|oito|eight|nove|nine|dez|ten|quinze|fifteen|vinte|twenty|trinta|thirty|quarenta|forty|cinquenta|fifty|sessenta|sixty|noventa|ninety)\b(?=\s*(-|\s)\s*([a-z]+\s+)?(h|hora|horas|hour|hours|min|minutos?|minutes?|s|seg|segundos?|sec|seconds?|versoes|versions|versao|version|impactos?|impacts?|aberturas|openings|alternative|whooshes?|cortes|cuts|transic|transit|explosoes|explosions|booms?|risers?)\b)/g, (m, w) => NUMW[w] != null ? String(NUMW[w]) : m);
   return s.replace(/\s+/g, ' ').trim();
@@ -109,9 +111,12 @@ function ctxAround(s, idx, len, before = 42, after = 34) {
 const has = (s, re) => re.test(s);
 
 // ---------- intérprete ----------
-export function interpret(text, prev) {
+export function interpret(text, prev, ctx = {}) {
+  const ctxPlan = ctx.plan || null;
   const spec = deepClone(prev || newSpec());
-  const s = norm(text);
+  spec.ops = spec.ops || []; spec.audio = spec.audio || { keepDialogue: true };
+  const sRaw = norm(text);
+  const { text: s, fixed: typos } = canon(sRaw);
   const said = [];      // o que entendi (pt-BR)
   const warn = [];      // avisos e limitações
   const ask = [];       // dúvidas para o usuário
@@ -122,7 +127,7 @@ export function interpret(text, prev) {
   const isFollowUp = !!prev;
 
   // ------ desfazer/recomeçar não é aqui (a interface trata), mas reconhecemos ------
-  if (/^(desfaz|desfazer|volta|undo|reverte)/.test(s)) return { spec: prev || spec, said: ['Desfazer'], warn, ask, undo: true };
+  if (/^(desfaz|desfazer|volta|undo|reverte)|\b(volta (como|do jeito que) estava|versao anterior|undo that|go back|desfaz isso|desfaz o ultimo)\b/.test(s)) return { spec: prev || spec, said: ['Desfazer'], warn, ask, undo: true };
 
   // ------ estilos com porcentagem: "70% documentario e 30% acao" ------
   // trechos que falam de UMA parte (final, momentos, cor, transição) não mudam o estilo geral
@@ -133,9 +138,10 @@ export function interpret(text, prev) {
     .replace(/\b(momentos?|moments?|partes?|cenas?)\s+(\w+\s+)?(emocion\w*|emotional|exciting|agitad\w*|tens\w*)/g, ' ')
     .replace(/\b(emocion\w*|emotional|exciting)\s+(momentos?|moments?|partes?|parts?|cenas?|scenes?)/g, ' ')
     .replace(/\bhighlight reels?\b/g, ' ');
+  const sStyle2 = prev ? sStyle.replace(/\b(mais|more)\s+(cara de |estilo |jeito de |pegada de |vibe de |clima de |like a? ?)?[a-z]+/g, ' ') : sStyle;
   const pctStyles = [];
   const pctRe = /(\d{1,3})\s*%\s*(?:de\s+|of\s+)?([a-z\s-]{3,40})/g; let m;
-  while ((m = pctRe.exec(sStyle))) {
+  while ((m = pctRe.exec(sStyle2))) {
     const chunk = m[2].split(/\b(e|and|com|with|\+)\b/)[0];
     const ids = STYLE_WORDS.filter(([, re]) => re.test(chunk)).map(([id]) => id);
     ids.forEach(id => pctStyles.push({ id, w: +m[1] / 100 / ids.length }));
@@ -143,7 +149,7 @@ export function interpret(text, prev) {
   let styleHits = [];
   if (pctStyles.length) styleHits = pctStyles;
   else {
-    for (const [id, re] of STYLE_WORDS) if (re.test(sStyle)) styleHits.push({ id, w: 1 });
+    for (const [id, re] of STYLE_WORDS) if (re.test(sStyle2)) styleHits.push({ id, w: 1 });
     // "cinematico e emocional" = os dois; "acao" + "trailer" = trailer pesa mais
     if (styleHits.some(h => h.id === 'trailer') && styleHits.some(h => h.id === 'action')) styleHits = styleHits.map(h => h.id === 'action' ? { ...h, w: 0.5 } : h);
     // "social" genérico perde para estilos específicos
@@ -213,14 +219,21 @@ export function interpret(text, prev) {
     // primeiros N segundos
     if (/\b(primeiros?|first|inicio|opening|abertura|comeco|beginning|iniciais)\b/.test(pre.slice(-26)) && d.v <= 30) {
       usedIdx.add(d.idx);
-      const after = pre.slice(-30) + ' ' + post.slice(0, 60) + ' ' + s.slice(d.idx + d.len, d.idx + d.len + 70);
-      if (/\b(lent|devagar|slow|calm|desaceler)/.test(after)) { spec.sections.push({ from: 0, to: d.v, pace: 'slow' }); said.push(`Primeiros ${fmtN(d.v)} s mais lentos`); }
+      if (/\b(tira|tire|remove|remova|corta|corte|apaga|apague|exclui|elimina|pula|pule|skip|cut|drop)\b/.test(pre.slice(-34))) {
+        const plan0 = ctxPlan; if (plan0) for (const x of rangeToSrc(plan0, 0, d.v)) spec.ops.push({ op: 'excludeSrc', ...x });
+        else spec.ops.push({ op: 'keepOnly', srcId: '*', from: d.v, to: 1e9 });
+        said.push(`Tirar os primeiros ${fmtN(d.v)} s`); continue;
+      }
+      const clause = s.slice(d.idx + d.len).split(/[,;.]|\be\b(?= (a|o|as|os|um|uma|\d))/)[0];
+      const after = pre.slice(-30).split(/[,;.]/).pop() + ' ' + clause.slice(0, 70);
+      if (/\b(gancho|momento mais forte|melhor momento|impacto|prend)/.test(after)) { spec.hookSeconds = d.v; said.push(`Gancho forte nos primeiros ${fmtN(d.v)} s`); }
+      else if (/\b(lent|devagar|slow|calm|desaceler)/.test(after)) { spec.sections.push({ from: 0, to: d.v, pace: 'slow' }); said.push(`Primeiros ${fmtN(d.v)} s mais lentos`); }
       else if (/\b(rapid|fast|dinamic|dynamic|acelerad|intens|frenetic)/.test(after)) { spec.sections.push({ from: 0, to: d.v, pace: 'fast' }); spec.hookSeconds = d.v; said.push(`Primeiros ${fmtN(d.v)} s bem dinâmicos, com gancho`); }
       else { spec.hookSeconds = d.v; said.push(`Gancho forte nos primeiros ${fmtN(d.v)} s`); }
       continue;
     }
     // últimos / final N segundos
-    if (/\b(ultimos?|last|finais|final|end|ending|fim)\b/.test(pre.slice(-22)) && d.v <= 60) {
+    if (/\b(ultimos?|last|finais|final|end|ending|fim)\b/.test(pre.slice(-22)) && d.v <= 60 && !/\b(corta|corte|tira|tire|remove|remova|apaga|exclui)\b/.test(pre.slice(-30)) && !/\b(por|for)\s*$/.test(pre.trim() + ' ' ) && !/\b(congela\w*|freeze|frize)\b/.test(pre.slice(-40))) {
       usedIdx.add(d.idx);
       const after = post + ' ' + s.slice(d.idx + d.len, d.idx + d.len + 60);
       const mood = /\bemocion|emotional|emotiv/.test(after) ? 'emotional' : /\bepic/.test(after) ? 'epic' : /\b(lent|slow)/.test(after) ? 'slow' : /\b(rapid|fast|intens)/.test(after) ? 'fast' : 'emotional';
@@ -247,16 +260,19 @@ export function interpret(text, prev) {
   if (filteredPlats.length) {
     const seen = new Set(); const outs = [];
     for (const p of filteredPlats.sort((a, b) => a.idx - b.idx)) {
-      const d = durForPlatform.get(p.idx);
+      let d = durForPlatform.get(p.idx);
+      if (!d) { const bm = s.slice(Math.max(0, p.idx - 18), p.idx).match(/\b(\d{1,3})\s+(pro|para|pra|no|na|for|on)?\s*(o |a |the )?$/); if (bm && +bm[1] >= 5 && +bm[1] <= 600) d = { v: +bm[1], exact: false }; }
       const key = p.id + '|' + (d ? d.v : '');
       if (seen.has(key)) continue; seen.add(key);
       outs.push({ platform: p.id, duration: d ? d.v : null, exact: d ? d.exact : false });
     }
     // mesma plataforma sem duração repetida some
     spec.outputs = outs; changed.add('outputs');
+    if (outs.length > 1 && spec.versions === outs.length) spec.versions = 1; // "3 versões: TikTok, Reels e YouTube" = 3 formatos
     said.push('Formato: ' + outs.map(o => PLATFORMS[o.platform].label + (o.duration ? ` (${fmtDur(o.duration)})` : '')).join(', '));
     if (outs.length === 1 && outs[0].duration && !spec.target) spec.target = { seconds: outs[0].duration, exact: outs[0].exact };
   }
+  if (!spec.target && !filteredPlats.length && mentions.length === 1 && !usedIdx.has(mentions[0].idx) && mentions[0].v >= 5 && s.replace(mentions[0].raw, '').replace(/\b(um|uma|de|com|so|apenas|quero|faz|faca|em|ter|tenha|video|o|a|deixa|deixe|fica|ficar|pra|para|total|no|tamanho|duracao|corta|corte|reduz|reduza|ele|isso)\b/g, '').trim().length < 4) { spec.target = { seconds: mentions[0].v, exact: false }; changed.add('target'); }
   if (changed.has('target') && spec.target) said.push(`Duração final ${spec.target.exact ? 'exata de ' : 'de cerca de '}${fmtDur(spec.target.seconds)}`);
 
   // "transforma 40 minutos em 60 segundos": a primeira duração é o material, a segunda o alvo
@@ -297,7 +313,7 @@ export function interpret(text, prev) {
   if (/\b(aberturas? alternativas?|alternative openings?|opcoes de abertura)\b/.test(s)) { const n = +(s.match(/(\d+)\s*(aberturas|alternative|opcoes)/) || [0, 3])[1]; spec.versions = Math.max(spec.versions, n); spec.versionsKind = 'openings'; said.push(`${n} aberturas diferentes para comparar`); }
 
   // ------ versões ------
-  const vm = s.match(/(\d+)\s+(\w+\s+)?(versoes|versions|interpretac\w*|variac\w*|variations|opcoes|options)\b/);
+  const vm = s.match(/(\d+)\s+(\w+\s+)?(versoes|versions|interpretac\w*|variac\w*|variations|opcoes|options|jeitos|formas|edicoes|alternativas|takes|ideias)\b/);
   if (vm) { spec.versions = clamp(+vm[1], 1, 4); spec.versionsKind = 'styles'; said.push(`${spec.versions} versões diferentes para comparar`); }
 
   // ------ música ------
@@ -307,10 +323,12 @@ export function interpret(text, prev) {
       const r = new RegExp(`\\b(musica|music|trilha|soundtrack|song|track)s?\\b.{0,20}(?:${re.source})|(?:${re.source})\\w*\\s+(\\w+\\s+)?(musica|music|trilha|soundtrack|songs?|tracks?)\\b`);
       if (r.test(s)) { spec.music.mood = id; spec.music.none = false; said.push(`Trilha ${moodPt(id)}`); break; }
     }
-    const pm = s.match(/(aumenta|aumentar|increase|sobe|subir|raise|boost|diminui|diminuir|decrease|baixa|abaixa|lower|reduce|reduz)\w*\s+(?:a\s+|the\s+)?(?:intensidade da |music intensity|musica|music|volume da musica|trilha)\D{0,25}(\d+)\s*%/);
+    const pm2 = s.match(/\b(musica|music)\s+(\d+)\s*%\s*(mais\s+|more\s+)?(baixa|alta|quieter|louder|intensa|forte)/);
+    if (pm2) { const sign = /baixa|quieter/.test(pm2[4]) ? -1 : 1; spec.music.intensity = clamp(spec.music.intensity + sign * (+pm2[2]) / 100, -1, 1); said.push(`Música ${sign > 0 ? '+' : '−'}${pm2[2]}%`); }
+    const pm = pm2 ? null : s.match(/(aumenta|aumentar|increase|sobe|subir|raise|boost|diminui|diminuir|decrease|baixa|abaixa|lower|reduce|reduz)\w*\s+(?:a\s+|the\s+)?(?:intensidade da |music intensity|musica|music|volume da musica|trilha)\D{0,25}(\d+)\s*%/);
     if (pm) { const sign = /diminu|decrease|baix|lower|reduc|reduz/.test(pm[1]) ? -1 : 1; spec.music.intensity = clamp(spec.music.intensity + sign * (+pm[2]) / 100, -1, 1); said.push(`Música ${sign > 0 ? '+' : '−'}${pm[2]}% de intensidade`); }
-    else if (/\b(musica|music|trilha)\b.{0,25}\b(mais intens|more intense|mais alta|louder|mais forte|stronger|mais pesad)/.test(s) || /\b(mais|more)\s+(dramatic|intens|epic)\w*\s+(musica|music)/.test(s) || /\badd more dramatic music\b/.test(s)) { spec.music.intensity = clamp(spec.music.intensity + 0.25, -1, 1); if (!spec.music.mood && /dramatic/.test(s)) spec.music.mood = 'dramatic'; said.push('Música mais intensa (+25%)'); }
-    else if (/\b(musica|music|trilha)\b.{0,25}\b(mais baixa|quieter|mais suave|softer|menos|lower)/.test(s)) { spec.music.intensity = clamp(spec.music.intensity - 0.25, -1, 1); said.push('Música mais baixa (−25%)'); }
+    else if (!/musica mais (baixa|alta)/.test(s) && /\b(musica|music|trilha)\b.{0,25}\b(mais intens|more intense|louder|mais forte|stronger|mais pesad)/.test(s) || /\b(mais|more)\s+(dramatic|intens|epic)\w*\s+(musica|music)/.test(s) || /\badd more dramatic music\b/.test(s)) { spec.music.intensity = clamp(spec.music.intensity + 0.25, -1, 1); if (!spec.music.mood && /dramatic/.test(s)) spec.music.mood = 'dramatic'; said.push('Música mais intensa (+25%)'); }
+    else if (!/musica mais (baixa|alta)/.test(s) && /\b(musica|music|trilha)\b.{0,25}\b(quieter|mais suave|softer|menos intens|lower)/.test(s)) { spec.music.intensity = clamp(spec.music.intensity - 0.25, -1, 1); said.push('Música menos intensa (−25%)'); }
     if (/\b(musica|music|audio|som|trilha)\b.{0,30}\b(do|deste|desse|from (this|the|that)|of (this|the))\b.{0,12}\b(video|clip|arquivo)/.test(s)) { spec.music.fromVideo = true; said.push('Usar a música tirada de um vídeo seu'); }
   }
   if (/\b(audio original|original\s+(\w+\s+)?audio|som original|fala original|dialogo|dialogue|conversa)\b/.test(s) && /\b(mant|keep|preserv|100|deixa)\b/.test(s)) { spec.audio.keepDialogue = true; set('music.duckDb', -16); said.push('Fala original preservada a 100%, música abaixa quando alguém fala'); }
@@ -320,7 +338,7 @@ export function interpret(text, prev) {
   const cm = s.match(/(\d+)\s+(\w+\s+)?(impactos?|impacts?|whooshes|whoosh|risers?|explosoes|explosions|booms?|hits?)\b/);
   if (cm) { const kind = sfxMap.find(([, re]) => re.test(cm[3]))[0]; spec.sfxRequests.push({ kind, count: +cm[1] }); said.push(`${cm[1]} efeitos de ${sfxPt(kind)}`); }
   if (/\b(efeitos sonoros|sound effects|sfx|sound design|efeito sonoro)\b/.test(s)) {
-    if (/\b(sem|no|tira|remove|menos|fewer|less)\b.{0,15}\b(efeitos sonoros|sound effects|sfx)/.test(s)) { set('sfx.density', 0.05); said.push('Quase sem efeitos sonoros'); }
+    if (/\b(sem|no|tira|remove|menos|fewer|less|nao quero|nao coloca|without)\b.{0,15}\b(efeitos sonoros|sound effects|sfx)/.test(s)) { set('sfx.density', 0.05); said.push('Quase sem efeitos sonoros'); }
     else { set('sfx.density', Math.max(0.55, cur.sfx.density)); if (/\bimpact|impacto/.test(s)) set('sfx.onImpacts', true); said.push('Efeitos sonoros' + (/\bimpact|impacto/.test(s) ? ' nos momentos de impacto' : '')); }
   }
 
@@ -335,7 +353,7 @@ export function interpret(text, prev) {
   }
 
   // ------ transições ------
-  if (/\b(sem transic|no transitions?|so cortes secos|only hard cuts|hard cuts only)\b/.test(s)) { set('transitions.mix', { cut: 1 }); said.push('Só cortes secos, sem transições'); }
+  if (/\b(sem transic|no transitions?|so cortes secos|only hard cuts|hard cuts only|sem efeito de transic|tira as transic|remove (as |the )?transi\w* (todas|all))/.test(s) && !/\b(remove|tira)\b.{0,20}\btransi\w*\b.{0,12}\d/.test(s)) { set('transitions.mix', { cut: 1 }); said.push('Só cortes secos, sem transições'); }
   else if (/\btransi/.test(s) && !/\b(remove|remova|tira|apaga|delete)\b.{0,20}\btransi/.test(s)) {
     if (/\b(suave|smooth|elegant|sutil|subtle|cinemat|profission|professional)/.test(s)) { set('transitions.mix', { cut: 0.55, dissolve: 0.3, dip: 0.15 }); set('transitions.dur', 0.5); said.push('Transições suaves e profissionais'); }
     else if (/\b(impact|rapid|fast|whip|chicote|dinamic|dynamic|energ)/.test(s)) { set('transitions.mix', { cut: 0.5, whip: 0.25, flash: 0.15, zoom: 0.1 }); set('transitions.dur', 0.2); said.push('Transições rápidas de impacto'); }
@@ -346,13 +364,14 @@ export function interpret(text, prev) {
   if (rt) { const t = parseTc(rt[2]); spec.ops.push({ op: 'removeTransition', t }); said.push(`Remover a transição em ${fmtTc(t)}`); }
 
   // ------ efeitos visuais ------
-  const sm = s.match(/(\d+)\s*%\s*(de\s+)?(camera lenta|slow ?motion|slow-mo|slowmo)/);
+  const sm = s.match(/(\d+)\s*%\s*(de\s+)?(camera lenta|slow ?motion|slow-mo|slowmo)/) || (s.match(/(?:camera lenta|slow ?motion|slow-mo|slowmo)\s*(?:de\s+|em\s+)?(\d+)\s*%/) || null);
   if (sm) { set('effects.slowmo', clamp(+sm[1] / 100, 0, 0.8)); said.push(`${sm[1]}% em câmera lenta`); }
   else if (/\b(sem camera lenta|no slow ?motion)\b/.test(s)) { set('effects.slowmo', 0); said.push('Sem câmera lenta'); }
-  else if (/\b(camera lenta|slow ?motion|slow-mo|slowmo)\b/.test(s)) { set('effects.slowmo', Math.max(0.15, cur.effects.slowmo)); said.push('Câmera lenta nos melhores momentos'); }
+  else if (/\b(camera lenta|slow ?motion|slow-mo|slowmo)\b/.test(s) && !/\b(camera lenta|slow ?motion|slowmo)\b[^,;]{0,25}\b(no|na|em|aos|at|de|do|da|nesse|nessa|aqui|logo)\b\s*(\d|final|fim|finalzinho|comec|inicio|meio|metade|ultim|primeir|ponto|parte|momento|trecho|corte|aqui)/.test(s) && !/\b(no|na|em)\s+(final|fim|finalzinho|comec\w*|inicio|meio)\b[^,;]{0,25}\b(camera lenta|slow ?motion|slowmo)\b/.test(s)) { set('effects.slowmo', Math.max(0.15, cur.effects.slowmo)); said.push('Câmera lenta nos melhores momentos'); }
   if (/\b(speed ?ramp|rampa de velocidade|acelera e desacelera|velocidade variavel)\b/.test(s)) { set('effects.speedRamp', true); said.push('Speed ramps'); }
-  if (/\b(zoom|punch[- ]?in|aproxima)\b/.test(s) && !/\b(sem|no)\s+zoom/.test(s)) { set('effects.punchIn', Math.max(0.6, cur.effects.punchIn)); said.push('Zoom de ênfase (punch-in)'); }
-  if (/\b(sem|no)\s+zoom/.test(s)) { set('effects.punchIn', 0); said.push('Sem zoom'); }
+  if (/\b(menos|less|pouco)\s+zoom\b/.test(s)) { set('effects.punchIn', (cur.effects.punchIn || 0) * 0.4); said.push('Menos zoom'); }
+  else if (/\b(zoom|punch[- ]?in|aproxima)\b/.test(s) && !/\b(sem|no|nao)\s+(quero\s+)?zoom/.test(s) && !/zoom nas palavras|pulso na batida|zoom lento|transicao de zoom|transicoes de zoom/.test(s)) { set('effects.punchIn', Math.max(0.6, cur.effects.punchIn)); said.push('Zoom de ênfase (punch-in)'); }
+  if (/\b(sem|no|nao quero)\s+zoom/.test(s)) { set('effects.punchIn', 0); set('noZoom', true); set('slowPush', 0); set('emphasisZoom', false); set('beatPulse', 0); said.push('Sem zoom nenhum (nem empurrão, nem pulso)'); }
   if (/\b(tremor|camera shake|shake|treme)\b/.test(s) && !/\bestabiliz|stabiliz/.test(s)) { set('effects.shake', Math.max(0.45, cur.effects.shake)); said.push('Tremor de câmera nos impactos'); }
   if (/\b(granulad|film grain|grain|granulacao)\b/.test(s)) { set('color.grain', 0.12); said.push('Granulado de filme'); }
   if (/\b(faixas pretas|barras pretas|letterbox|cinemascope|widescreen bars|black bars)\b/.test(s)) { set('effects.letterbox', !/\bsem\b|\bno\b/.test(s)); said.push(over.effects.letterbox ? 'Faixas pretas de cinema' : 'Sem faixas pretas'); }
@@ -377,13 +396,17 @@ export function interpret(text, prev) {
     if (spec.captions.translate) warn.push('Tradução de legendas: a versão grátis ainda não traduz sozinha. Por enquanto você cola a tradução ou o roteiro traduzido e eu sincronizo.');
   }
   if (/\b(destac|highlight|enfatiz|emphasi)\w*\b.{0,30}\b(palavras?|words?)/.test(s)) { spec.captions.highlight = true; said.push('Destacar palavras importantes'); }
-  if (/\b(maiuscul|caixa alta|uppercase|all caps|caps lock)\b/.test(s)) spec.captions.uppercase = true;
+  if (/\b(sem caixa alta|minuscul\w*|lowercase|sem maiuscul\w*|tira (a )?caixa alta)\b/.test(s)) { spec.captions.uppercase = false; said.push('Legenda sem caixa alta'); }
+  else if (/\b(maiuscul\w*|caixa alta|uppercase|all caps|caps lock|tudo em maiusculo)\b/.test(s)) { spec.captions.uppercase = true; said.push('Legenda em caixa alta'); }
 
   // ------ textos com forma e títulos ------
   const quoted = [...String(text).matchAll(/["“”']([^"“”']{1,80})["“”']/g)].map(x => x[1]);
-  const shapeMap = [['circle', /\b(circul|circle|redond|round|em volta|around)/], ['arc', /\b(arco|arc|curv|curved)/], ['wave', /\b(onda|wave|ondulad|wavy)/], ['badge', /\b(selo|badge|sticker|adesivo|carimbo|stamp)/], ['spiral', /\b(espiral|spiral)/]];
-  for (const [shape, re] of shapeMap) {
-    if (re.test(s) && /\b(texto|text|escrita|escrito|frase|palavra|letreiro|titulo|title|legenda)/.test(s)) {
+  const shapeMap = [['circle', /\b(circul\w*|circle|redond\w*|girando em volta|em volta d[oa] (rosto|cabeca|pessoa)|around (the |my )?(face|head))/], ['arc', /\b(arco|arc|curv|curved)/], ['wave', /\b(onda|wave|ondulad|wavy)/], ['badge', /\b(selo|badge|sticker|adesivo|carimbo|stamp)/], ['spiral', /\b(espiral|spiral)/]];
+  const quotedTxt = [...String(text).matchAll(/["“”']([^"“”']{1,80})["“”']/g)].map(x => x[1]);
+  if (/\b(tira|tire|remove|remova|sem|apaga|apague|exclui|delete|no)\b.{0,20}\b(texto|textos|selo|adesivo|sticker|badge|escrita|carimbo|letreiro)\b/.test(s) && !quotedTxt.length) {
+    if (spec.texts.length) { spec.texts = []; said.push('Sem texto com forma'); } else if (/\btitulo\b/.test(s) && spec.title) { spec.title = null; said.push('Sem título'); } else said.push('Sem textos extras');
+  } else for (const [shape, re] of shapeMap) {
+    if (re.test(s) && (/\b(texto|text|escrita|escrito|frase|palavra|letreiro|titulo|title|legenda)/.test(s) || (quotedTxt.length && /\b(coloca|poe|bota|adiciona|insere|add|put|um|uma)\b/.test(s)))) {
       const txt = quoted[0] || (spec.title || '');
       const follow = /\b(em volta d[oa] (rosto|cabeca|pessoa)|around (the |my |his |her )?(face|head|person)|seguindo a pessoa|follow)/.test(s);
       spec.texts.push({ shape, text: txt || 'SEU TEXTO AQUI', at: 'auto', follow });
@@ -411,6 +434,9 @@ export function interpret(text, prev) {
   else if (/\b720p?\b/.test(s)) { spec.export.resolution = '720p'; said.push('Exportar em 720p'); }
   const fm = s.match(/(\d{2})\s*(fps|quadros)/); if (fm) { spec.export.fps = clamp(+fm[1], 24, 60); said.push(`${spec.export.fps} quadros por segundo`); }
 
+  extraRules({ s, text, spec, prev, ctx, said, warn, ask, set, changed, styleHits, eff });
+  if (typos.length) said.push('Entendi a digitação: ' + typos.slice(0, 4).map(([a, b]) => `"${a}" como "${b}"`).join(', '));
+
   // ------ conflitos ------
   const e2 = resolveStyle(spec);
   if (e2.pacing.avgShot < 1.2 && spec.mix.some(x => ['documentary', 'interview', 'wedding', 'minimal'].includes(x.id)) && changed.has('pacing.avgShot'))
@@ -420,9 +446,66 @@ export function interpret(text, prev) {
     warn.push(`${fmtDur(spec.target.seconds)} passa do limite de ${spec.outputs.map(o => PLATFORMS[o.platform].label).join('/')}.`);
   if (spec.hookSeconds && spec.target && spec.hookSeconds > spec.target.seconds * 0.5) warn.push('O gancho ficou maior que metade do vídeo; vou limitar a 1/4 da duração.');
 
-  if (!said.length && !ask.length && !spec.ops.length) ask.push('Não entendi esse pedido. Tente algo como: "corta mais rápido", "música mais intensa", "legenda palavra por palavra", "versão de 30 segundos para TikTok".');
+  const real = said.filter(x => !x.startsWith('Entendi a digitação'));
+  let suggestions = [];
+  if (!real.length && !ask.length && spec.ops.length === (prev && prev.ops ? prev.ops.length : 0) && !spec._export && !spec._reroll) {
+    suggestions = suggest(text);
+    ask.push(`Não entendi "${String(text).trim().slice(0, 80)}".` + (suggestions.length ? ' Você quis dizer algo assim?' : ' Tente com outras palavras, por exemplo "corta mais rápido" ou "legenda palavra por palavra".'));
+  }
   spec.history = [...(prev && prev.history || []), text].slice(-50);
-  return { spec, said, warn, ask, followUp: isFollowUp };
+  const exportNow = !!spec._export, reroll = !!spec._reroll, useRef = !!spec._useRef;
+  delete spec._export; delete spec._reroll; delete spec._useRef;
+  return { spec, said, warn, ask, followUp: isFollowUp, suggestions, exportNow, reroll, useRef };
+}
+
+// ---------- momentos: cada oração ("câmera lenta no final e congela no começo") tem o seu ponto ----------
+const FREEZE_RE = /\b(congela|congelar|congele|congelado|congelada|freeze|frize|pausa a imagem|para a imagem|imagem parada|parar a imagem)\b/;
+const SLOW_RE = /\b(camera lenta|slow ?motion|slowmo|slow|devagarinho|em camera lenta)\b/;
+const FAST_RE = /\b(acelera|acelerar|acelere|acelerado|acelerada|mais rapido esse|time ?lapse|timelapse|2x|speed ?up|fast forward)\b/;
+const SPLIT_RE = /\b(divide|dividir|divida|corta aqui|split|quebra (o corte|aqui)|separa (aqui|o corte))\b/;
+export function relPoint(cl, plan, ctx) {
+  const D = plan ? plan.duration : null;
+  const abs = findPoint(cl); if (abs != null) return abs;
+  const m = cl.match(/\b(?:aos|em|no|at)\s+(\d+(?:[.,]\d+)?)\s*(?:s|seg|segundos?|seconds?)\b/); if (m) return +m[1].replace(',', '.');
+  if (/\b(aqui|agora|nesse ponto|neste ponto|onde (esta|ta) (a linha|o cursor|parado)|here|right here)\b/.test(cl) && ctx && ctx.t != null) return ctx.t;
+  if (!D) return null;
+  if (/\b(comecinho|logo no comeco|no comeco|o comeco|no inicio|o inicio|na abertura|primeiro segundo|primeiros segundos|beginning|at the start|start)\b/.test(cl)) return Math.min(0.4, D * 0.05);
+  if (/\b(finalzinho|no final|no fim|o final|ultimo segundo|ultimos segundos|at the end|ending|ultimo corte)\b/.test(cl)) return Math.max(0, D - 1.2);
+  if (/\b(no meio|do meio|na metade|metade do video|middle|halfway)\b/.test(cl)) return D / 2;
+  return null;
+}
+function clipsIn(plan, a, b) { return plan ? plan.clips.filter(c => c.start < b - 0.05 && c.start + c.dur > a + 0.05 && c.speed !== 'freeze') : []; }
+function momentRules({ s, spec, prev, plan, ctx, said, ranges }) {
+  const clauses = s.split(/\s*(?:[,;]|\s(?:e|and|depois|tambem|alem disso|mais um|mais uma|then)\s)\s*/).filter(x => x.trim());
+  const doneSpeed = new Set();
+  for (const cl of clauses) {
+    const rg = findRanges(cl);
+    const pt = relPoint(cl, plan, ctx);
+    if (FREEZE_RE.test(cl) && pt != null && !rg.length) {
+      const d = cl.match(/\bpor\s+(\d+(?:[.,]\d+)?)\s*(s|seg|segundos?)\b|\bfor\s+(\d+(?:\.\d+)?)\s*s/) || [];
+      const dur = +((d[1] || d[3] || '1.5').replace(',', '.'));
+      const m = outToSrc(plan, pt) || { srcId: '*', t: pt };
+      spec.ops.push({ op: 'freeze', srcId: m.cover ? m.cover.srcId : m.srcId, at: m.cover ? m.cover.in + (pt - m.clip.start - m.cover.offset) : m.t, dur: clamp(dur, 0.3, 6) });
+      said.push(`Congelar a imagem em ${fmtTc2(pt)} por ${fmtN(clamp(dur, 0.3, 6))} s`);
+    }
+    let slow = SLOW_RE.test(cl) && !/\b(sem|tira|no)\s+(camera lenta|slow)/.test(cl);
+    const slowWord = /\b(mais lento|devagar|bem lento|lentinho)\b/.test(cl) && (rg.length || findPoint(cl) != null) && !/\b(corte|cortes|ritmo|edicao|montagem)\b/.test(cl);
+    const fastWord = /\bmais rapido\b/.test(cl) && !/\b(corte|cortes|ritmo|edicao|montagem)\b/.test(cl) && (rg.length || findPoint(cl) != null);
+    const fast = FAST_RE.test(cl) || fastWord; if (slowWord) { slow = true; const i = said.findIndex(x => x.startsWith('Cortes mais lentos') || x.startsWith('Ritmo mais calmo')); if (i >= 0) { said.splice(i, 1); spec.over.pacing = deepClone((prev && prev.over && prev.over.pacing) || {}); } }
+    if (fastWord) { const i = said.findIndex(x => x.startsWith('Cortes mais rápidos')); if (i >= 0) { said.splice(i, 1); spec.over.pacing = deepClone((prev && prev.over && prev.over.pacing) || {}); if (!Object.keys(spec.over.pacing).length) delete spec.over.pacing; } }
+    if ((slow || fast) && plan && (rg.length || pt != null)) {
+      const sp = slow ? (/\b(bem|muito|super|extrema)\w*\s+(lenta|lento|devagar)|\b25 ?%/.test(cl) ? 0.35 : 0.5) : (/\b(3x|muito|bem|super)\b/.test(cl) ? 3 : 2);
+      const list = rg.length ? rg.flatMap(r => clipsIn(plan, r.from, r.to)) : plan.clips.filter(c => c.speed !== 'freeze' && pt >= c.start - 0.001 && pt < c.start + c.dur).slice(0, 1);
+      let n = 0;
+      for (const c of list) { const k = c.srcId + ':' + c.in.toFixed(2); if (doneSpeed.has(k)) continue; doneSpeed.add(k); spec.ops.push({ op: 'setSpeed', srcId: c.srcId, in: c.in, speed: sp }); n++; }
+      if (n && fast && FAST_RE.test(cl) && /\bacelerad/.test(cl)) { const i = said.findIndex(x => x.startsWith('Estilo: ')); if (i >= 0 && !/\b(viral|tiktok|dinamic|redes? sociais?|estilo)\b/.test(s)) { said.splice(i, 1); spec.mix = deepClone(prev ? prev.mix : spec.mix); } const j = said.findIndex(x => x.startsWith('Cortes mais rápidos')); if (j >= 0) { said.splice(j, 1); spec.over.pacing = deepClone((prev && prev.over && prev.over.pacing) || {}); } }
+      if (n) said.push(`${slow ? 'Câmera lenta' : 'Acelerar ' + sp + 'x'} ${rg.length ? `de ${fmtTc2(rg[0].from)} a ${fmtTc2(rg[0].to)}` : `em ${fmtTc2(pt)}`}`);
+    }
+    if (SPLIT_RE.test(cl) && pt != null) {
+      const m = outToSrc(plan, pt);
+      if (m) { spec.ops.push({ op: 'split', srcId: m.srcId, at: m.t }); said.push(`Dividir o corte em ${fmtTc2(pt)}`); }
+    }
+  }
 }
 
 // Parâmetros efetivos = estilo misturado + sobrescritas explícitas.
@@ -454,3 +537,238 @@ const moodPt = m => ({ epic: 'épica', dramatic: 'dramática', emotional: 'emoci
 const sfxPt = k => ({ impact: 'impacto', whoosh: 'whoosh', riser: 'subida (riser)', boom: 'explosão', pop: 'pop', ding: 'ding' })[k] || k;
 const shapePt = k => ({ circle: 'círculo', arc: 'arco', wave: 'onda', badge: 'selo', spiral: 'espiral' })[k] || k;
 const langPt = k => ({ pt: 'português', en: 'inglês', es: 'espanhol', fr: 'francês' })[k] || k;
+
+
+// ======================= REGRAS NOVAS (banco ampliado) =======================
+// Tempo na tela (prévia) → tempo no arquivo original, usando o plano atual.
+function outToSrc(plan, t) {
+  if (!plan) return null;
+  const c = plan.clips.find(c => t >= c.start - 1e-3 && t < c.start + c.dur) || plan.clips[plan.clips.length - 1];
+  if (!c) return null;
+  const cv = (c.covers || []).find(x => t >= c.start + x.offset && t < c.start + x.offset + x.len);
+  const sp = typeof c.speed === 'number' ? c.speed : 1;
+  return { srcId: c.srcId, t: c.in + (t - c.start) * (c.speed === 'freeze' ? 0 : sp), clip: c, cover: cv || null };
+}
+function rangeToSrc(plan, a, b) {
+  if (!plan) return [{ srcId: '*', from: a, to: b }];
+  const out = [];
+  for (const c of plan.clips) {
+    const s0 = Math.max(a, c.start), s1 = Math.min(b, c.start + c.dur);
+    if (s1 - s0 < 0.04 || c.speed === 'freeze') continue;
+    const sp = typeof c.speed === 'number' ? c.speed : 0.7;
+    out.push({ srcId: c.srcId, from: c.in + (s0 - c.start) * sp, to: c.in + (s1 - c.start) * sp });
+  }
+  return out;
+}
+const fmtTc2 = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+
+function extraRules({ s, text, spec, prev, ctx, said, warn, ask, set, changed, styleHits, eff }) {
+  const cur = eff();
+  const over = spec.over;
+  const plan = ctx.plan || null;
+  const quoted = [...String(text).matchAll(/["“”']([^"“”']{1,90})["“”']/g)].map(x => x[1]);
+  const neg = re => new RegExp(`\\b(sem|tira|tire|remove|remova|nao|no|without|desliga)\\b.{0,14}${re}`).test(s);
+
+  // --- assunto/gênero vira estilo (quando nenhum estilo foi dito) ---
+  if (!styleHits.length) {
+    for (const [re, t] of TOPIC_STYLE) if (re.test(s)) {
+      spec.mix = [{ id: t.mix, w: 1 }]; set('color.look', t.look); if (!spec.music.mood) spec.music.mood = t.mood;
+      said.push(`${t.say}: estilo ${PRESETS[t.mix].label}, cor ${LOOKS[t.look].label.toLowerCase()}`); break;
+    }
+  }
+  // --- "mais cinematográfico", "mais cara de documentário" (mistura com o atual) ---
+  if (prev) {
+    const m = s.match(/\b(mais|more)\s+(cara de |estilo |jeito de |pegada de |vibe de |clima de |like a? ?)?(cinematografic\w*|cinema|cinematic|documentari\w*|documentary|emocion\w*|emotional|acao|action|epic\w*|comercial|commercial|viral|tiktok|youtuber|luxo\w*|luxury|elegante|natural|minimalista|vintage|retro|profission\w*|professional|premium)\b/);
+    if (m) {
+      const w = m[3];
+      const id = /cinem/.test(w) ? 'cinematic' : /doc/.test(w) ? 'documentary' : /emoc|emot/.test(w) ? 'emotional' : /acao|action/.test(w) ? 'action' : /epic/.test(w) ? 'trailer' : /comerc|commerc|profiss|profess|premium/.test(w) ? 'commercial' : /viral|tiktok|youtuber/.test(w) ? 'energetic' : /lux|eleg/.test(w) ? 'luxury' : /natur|minim/.test(w) ? 'minimal' : null;
+      if (id && !styleHits.some(h => h.id === id)) {
+        const mix = (prev.mix || []).map(x => ({ ...x, w: x.w * 0.65 }));
+        const ex = mix.find(x => x.id === id); if (ex) ex.w += 0.35; else mix.push({ id, w: 0.35 });
+        spec.mix = mix; said.push(`Mais ${PRESETS[id].label.toLowerCase()} (misturei 35% no estilo atual)`);
+        if (/vintage|retro/.test(w)) set('color.look', 'vintage');
+      }
+    }
+  }
+  // --- luz e cor finas ---
+  const adj = { ...(over.adjust || {}) }; let adjSaid = [];
+  const times = /\b(bem|muito|mt|much|a lot|bastante)\b/.test(s) ? 2 : /\b(um pouco|pouquinho|levemente|slightly|a bit|leve)\b/.test(s) ? 0.5 : 1;
+  if (/ajuste clarear/.test(s)) { adj.exposure = (adj.exposure || 0) + 0.22 * times; adjSaid.push('mais claro'); }
+  if (/ajuste escurecer/.test(s)) { adj.exposure = (adj.exposure || 0) - 0.22 * times; adjSaid.push('mais escuro'); }
+  if (/ajuste saturar/.test(s)) { adj.saturation = (adj.saturation || 1) * (1 + 0.22 * times); adjSaid.push('cores mais vivas'); }
+  if (/ajuste dessaturar/.test(s)) { adj.saturation = (adj.saturation || 1) * (1 - 0.2 * times); adjSaid.push('cores mais suaves'); }
+  if (/ajuste esquentar/.test(s)) { adj.temp = (adj.temp || 0) + 0.07 * times; adjSaid.push('mais quente'); }
+  if (/ajuste esfriar/.test(s)) { adj.temp = (adj.temp || 0) - 0.07 * times; adjSaid.push('mais frio'); }
+  if (/ajuste contraste mais/.test(s)) { adj.contrast = (adj.contrast || 1) * (1 + 0.12 * times); adjSaid.push('mais contraste'); }
+  if (/ajuste contraste menos/.test(s)) { adj.contrast = (adj.contrast || 1) * (1 - 0.1 * times); adjSaid.push('menos contraste'); }
+  if (/\b(vinheta|vignette|bordas escuras)\b/.test(s)) { adj.vignette = neg('(vinheta|vignette|bordas escuras)') ? 0 : 0.35; adjSaid.push(adj.vignette ? 'vinheta' : 'sem vinheta'); }
+  if (/\b(granulad|grain|granulacao)\w*/.test(s) && neg('(granulad|grain)')) { adj.grain = 0; adjSaid.push('sem granulado'); }
+  if (/\b(cor original|sem filtro|tira o filtro|remove the filter|no filter|cores? naturais?|deixa natural|mais natural|cor natural|natural colou?rs?)\b/.test(s) || (/\b(nao gostei|nao curti|feia|estranha|errada)\b.{0,12}\b(cor|cores|filtro|colou?r)\b/.test(s))) { set('color.look', 'natural'); delete adj.saturation; delete adj.temp; adjSaid.push('cor natural'); }
+  if (/\bmenos transicoes\b/.test(s)) { set('transitions.mix', { cut: 0.85, dissolve: 0.15 }); said.push('Menos transições, mais cortes secos'); }
+  if (/\bmenos efeitos\b/.test(s)) { set('effects.punchIn', Math.min(cur.effects.punchIn, 0.15)); set('effects.shake', 0); set('effects.flash', 0); }
+  if (adjSaid.length) { set('adjust', adj); said.push('Imagem: ' + adjSaid.join(', ')); }
+  // --- tremido: ainda não estabiliza; evita as tomadas tremidas ---
+  if (/\b(tremend\w*|tremid\w*|treme|tremer|balanc\w*|shaky|shaking|estabiliz\w*|stabiliz\w*)\b/.test(s) && !/\btremor\b/.test(s)) {
+    set('avoidShaky', true); said.push('Evitar as tomadas tremidas');
+    warn.push('Ainda não estabilizo a imagem. Deixei de fora os trechos tremidos sempre que há outro material para usar.');
+  }
+  // --- enquadramento ---
+  if (/enquadrar inteiro/.test(s)) { set('fit', true); said.push('Mostrar o vídeo inteiro, com fundo desfocado (sem cortar as laterais)'); }
+  if (/enquadrar preencher/.test(s)) { set('fit', false); said.push('Preencher a tela (corta as laterais seguindo a pessoa)'); }
+  if (/\bespelhar\b/.test(s)) { set('mirror', !neg('espelhar') && !(prev && prev.over && prev.over.mirror)); said.push(over.mirror ? 'Imagem espelhada' : 'Imagem sem espelhar'); }
+  // --- manchete, barra, pulso, ênfase, muletas ---
+  if (/\bmanchete\b/.test(s)) {
+    if (neg('manchete')) { spec.headline = null; said.push('Sem manchete'); }
+    else {
+      const txt = quoted.find(q => !spec.texts.some(t => t.text === q)) || (spec.headline && spec.headline.text);
+      if (txt) { spec.headline = { text: txt, all: /\b(video (todo|inteiro)|o tempo todo|sempre|whole video|all the time)\b/.test(s), style: /\b(sem caixa|grande|bold|contorno)\b/.test(s) ? 'bold' : 'box' }; if (spec.title === txt) spec.title = null; said.push(`Manchete no topo: "${txt}"${spec.headline.all ? ' (o vídeo todo)' : ' (primeiros segundos)'}`); }
+      else ask.push('Qual frase vai na manchete? Escreva entre aspas, por exemplo: manchete "3 erros que você comete".');
+    }
+  }
+  if (/barra de progresso/.test(s)) { const off = neg('barra de progresso'); set('progressBar', !off); said.push(off ? 'Sem barra de progresso' : 'Barra de progresso no topo'); }
+  if (/pulso na batida/.test(s)) { const off = neg('pulso'); const k = off ? 0 : /\b(forte|forte|strong|bem|muito)\b/.test(s) ? 1 : /\b(leve|sutil|subtle|pouco)\b/.test(s) ? 0.4 : 0.7; set('beatPulse', k); set('pacing.beatSync', true); said.push(off ? 'Sem pulso na batida' : 'Zoom pulsando na batida da música'); }
+  if (/zoom nas palavras fortes/.test(s)) { set('emphasisZoom', !neg('zoom')); said.push('Zoom rápido nas palavras fortes (usa a legenda)'); }
+  if (/\bmuletas\b/.test(s) && /\b(tira|tire|remove|remova|sem|corta|limpa|elimina|without|cut)\b|^\s*muletas/.test(s)) { set('fillers', true); said.push('Tirar "ahn", muletas e palavras repetidas (usa a transcrição)'); }
+  if (/\b(repetic|repetid|repete|repeated)\w*/.test(s) && /\b(tira|remove|sem|corta|cut)\b/.test(s)) { set('fillers', true); if (!said.some(x => x.startsWith('Tirar "ahn"'))) said.push('Tirar palavras repetidas (usa a transcrição)'); }
+  // --- volumes ---
+  const au = spec.audio;
+  if (/sem som original/.test(s)) { au.muteOriginal = true; said.push('Som original dos vídeos desligado (fica só música e efeitos)'); }
+  if (/\b(volta|liga|com|mantem|keep|restore)\s+(o )?(som|audio) original\b/.test(s)) { au.muteOriginal = false; said.push('Som original ligado'); }
+  if (/voz mais alta/.test(s)) { au.originalDb = Math.min(12, (au.originalDb || 0) + 4); au.musicDb = Math.max(-20, (au.musicDb || 0) - 3); said.push('Voz mais alta, música um pouco mais baixa'); }
+  if (/voz mais baixa/.test(s)) { au.originalDb = Math.max(-20, (au.originalDb || 0) - 4); said.push('Voz mais baixa'); }
+  if (/musica mais baixa/.test(s)) { au.musicDb = Math.max(-24, (au.musicDb || 0) - 5 * (times === 2 ? 1.6 : times)); said.push('Música mais baixa'); }
+  if (/musica mais alta/.test(s)) { au.musicDb = Math.min(12, (au.musicDb || 0) + 4 * (times === 2 ? 1.6 : times)); said.push('Música mais alta'); }
+  if (/\befeitos sonoros\b.{0,15}\b(mais baixos?|baixinhos?|quieter)\b/.test(s)) { au.sfxDb = (au.sfxDb || 0) - 5; said.push('Efeitos sonoros mais baixos'); }
+  if (/\befeitos sonoros\b.{0,15}\b(mais altos?|louder)\b/.test(s)) { au.sfxDb = (au.sfxDb || 0) + 4; said.push('Efeitos sonoros mais altos'); }
+  if (/\b(mais|more)\s+efeitos sonoros\b/.test(s)) { set('sfx.density', clamp(cur.sfx.density * 1.6 + 0.15, 0, 1)); said.push('Mais efeitos sonoros'); }
+  if (/\b(menos|less|fewer)\s+efeitos sonoros\b/.test(s)) { set('sfx.density', cur.sfx.density * 0.45); said.push('Menos efeitos sonoros'); }
+  // --- legenda: posição, tamanho, cor, fonte ---
+  if (/\blegenda\b/.test(s)) {
+    const cy = over.captionY != null ? over.captionY : 0.62;
+    if (/\b(sobe|subir|suba|mais pra cima|mais para cima|move (it )?up|higher|levanta)\b/.test(s)) { set('captionY', clamp(cy - 0.2, 0.18, 0.85)); said.push('Legenda mais para cima'); }
+    else if (/\b(desce|descer|desca|mais pra baixo|mais para baixo|move (it )?down|lower)\b/.test(s) || /\b(em cima|alta|no alto) demais\b/.test(s)) { set('captionY', clamp(cy + 0.14, 0.18, 0.85)); said.push('Legenda mais para baixo'); }
+    else if (/\b(cobrindo|tampando|em cima d[oa]|covering) (a |o |minha |meu |the )?(cara|rosto|boca|face)\b/.test(s)) { set('captionY', 0.8); said.push('Legenda para baixo, longe do rosto'); }
+    else if (/\b(em cima|no topo|na parte de cima|la em cima|top|acima)\b/.test(s)) { set('captionY', 0.24); said.push('Legenda em cima'); }
+    else if (/\b(no meio|centro|centralizad|middle|center)\b/.test(s)) { set('captionY', 0.5); said.push('Legenda no meio'); }
+    else if (/\b(embaixo|em baixo|na parte de baixo|bottom|mais pra baixo|mais para baixo)\b/.test(s)) { set('captionY', 0.78); said.push('Legenda embaixo'); }
+    if (/\b(maior|maiores|grande|grandes|gigante|bigger|larger|big|huge|enorme)\b/.test(s)) { set('captionScale', clamp((over.captionScale || 1) * 1.25, 0.5, 2)); said.push('Legenda maior'); }
+    if (/\b(menor|menores|pequena|pequenas|smaller|discreta)\b/.test(s)) { set('captionScale', clamp((over.captionScale || 1) * 0.8, 0.5, 2)); said.push('Legenda menor'); }
+    const cm = s.match(/\b(amarel\w*|yellow|verde|green|vermelh\w*|red|azul|blue|rosa|pink|branc\w*|white|laranja|orange|roxo|purple)\b/);
+    if (cm) { const col = { amarel: '#FFE81F', yellow: '#FFE81F', verde: '#3DFF6E', green: '#3DFF6E', vermelh: '#FF3B3B', red: '#FF3B3B', azul: '#4DD9FF', blue: '#4DD9FF', rosa: '#FF2BD6', pink: '#FF2BD6', branc: '#FFFFFF', white: '#FFFFFF', laranja: '#FF8A1F', orange: '#FF8A1F', roxo: '#9B5CFF', purple: '#9B5CFF' }[Object.keys({ amarel: 1, yellow: 1, verde: 1, green: 1, vermelh: 1, red: 1, azul: 1, blue: 1, rosa: 1, pink: 1, branc: 1, white: 1, laranja: 1, orange: 1, roxo: 1, purple: 1 }).find(k => cm[1].startsWith(k))]; set('captionColor', col); said.push('Destaque da legenda em ' + cm[1]); }
+    const fm = s.match(/\b(montserrat|anton|bebas|bangers|luckiest|archivo|oswald|poppins|playfair|caveat|marker|rubik|space mono|lilita|inter|lora)\b/);
+    if (!fm && /\b(letra|fonte|font)\b/.test(s) || /\b(mais )?(grossa|grosso|negrito|bold|pesada|forte|gordinha)\b.{0,12}\b(legenda|letra|fonte)\b|\b(legenda|letra|fonte)\b.{0,25}\b(grossa|grosso|negrito|bold|pesada|gordinha)\b/.test(s)) {
+      const fw = /\b(grossa|grosso|negrito|bold|pesada|gordinha|impacto|forte)\b/.test(s) ? 'anton' : /\b(fina|fininha|leve|delicada|elegante|thin|light)\b/.test(s) ? 'playfair' : /\b(maquina de escrever|typewriter|mono)\b/.test(s) ? 'spacemono' : /\b(escrita a mao|manuscrita|cursiva|handwritten|caneta)\b/.test(s) ? 'caveat' : /\b(divertida|engracada|cartoon|desenho|quadrinho|comic)\b/.test(s) ? 'bangers' : /\b(estreita|alta e fina|condensada|condensed)\b/.test(s) ? 'bebas' : /\b(redonda|arredondada|fofa|rounded)\b/.test(s) ? 'lilita' : /\b(marcador|pincel|grafite|marker)\b/.test(s) ? 'marker' : null;
+      if (fw) { set('captionFont', fw); said.push('Fonte da legenda: ' + fw); }
+    }
+    if (fm) { set('captionFont', { 'space mono': 'spacemono', rubik: 'rubikmono', luckiest: 'luckiest', marker: 'marker' }[fm[1]] || fm[1]); said.push('Fonte da legenda: ' + fm[1]); }
+  }
+  // --- referência ---
+  if (/\b(igual|parecid\w*|no estilo d[oa]|tipo o|tipo a|like|same as|similar to|copiando|copia o estilo|baseado n[oa]|inspirado n[oa])\b.{0,30}\b(referencia|reference|esse video|esse outro|aquele video|video que (eu )?(mandei|subi)|video modelo|modelo)\b/.test(s)) {
+    spec._useRef = true; said.push('Copiar o jeito do vídeo de referência (ritmo, cor e energia)');
+  }
+  // --- outra opção / exportar ---
+  if (/\b(outra (opcao|versao|tentativa)|tenta de novo|tenta outra|de novo diferente|surpreende|shuffle|another (version|option|take)|try again|refaz|refazer)\b/.test(s)) { spec._reroll = true; said.push('Outra montagem com as mesmas regras'); }
+  if (/^\s*((gostei|curti|ficou (bom|otimo|perfeito|top|show)|perfeito|show|top|massa|ta (bom|otimo|perfeito)|ok|beleza|amei)\W*\s*)?(pode |ja pode |agora |entao |ok |beleza |show |so )?(exporta|exportar|exporte|baixa|baixar|salva o video|salvar o video|export|download|finaliza|finalizar|gera o video|gerar o video)\b/.test(s)) { spec._export = true; said.push('Exportar o vídeo'); }
+  // --- duração relativa ---
+  if (prev && plan && /\b(mais curto|mais curta|encurta|diminui o video|menor|shorter|cut it down|resume mais)\b/.test(s) && !/legenda/.test(s) && !changed.has('target')) { const n = Math.round(plan.duration * 0.72); spec.target = { seconds: n, exact: false }; spec.outputs = spec.outputs.map(o => ({ ...o, duration: n })); said.push(`Mais curto: ${fmtDur(plan.duration)} → ~${fmtDur(n)}`); }
+  if (prev && plan && /\b(mais longo|mais longa|aumenta o video|maior duracao|longer|extend it)\b/.test(s) && !changed.has('target')) { const n = Math.round(plan.duration * 1.35); spec.target = { seconds: n, exact: false }; spec.outputs = spec.outputs.map(o => ({ ...o, duration: n })); said.push(`Mais longo: ~${fmtDur(n)} (se houver material)`); }
+  // --- trechos e momentos ---
+  const ranges = findRanges(s);
+  const pt = findPoint(s);
+  if (ranges.length && /\b(tira|tire|remove|remova|corta|corte|apaga|apague|exclui|exclua|sem|elimina|cut|delete|drop)\b/.test(s)) {
+    for (const r of ranges) { for (const x of rangeToSrc(plan, r.from, r.to)) spec.ops.push({ op: 'excludeSrc', ...x }); said.push(`Tirar o trecho de ${fmtTc2(r.from)} a ${fmtTc2(r.to)}`); }
+  } else if (ranges.length && /\b(so|somente|apenas|only|usa so|use only)\b/.test(s)) {
+    for (const r of ranges) { spec.ops.push({ op: 'keepOnly', srcId: '*', from: r.from, to: r.to }); said.push(`Usar só o trecho de ${fmtTc2(r.from)} a ${fmtTc2(r.to)} do material`); }
+  }
+  const firstN = s.match(/\b(so|somente|apenas|only)\b.{0,15}\b(primeiros?|first)\s+(\d+(?:\.\d+)?)\s*(min\w*|s|seg\w*|sec\w*)/);
+  if (firstN) { const v = +firstN[3] * (/^min/.test(firstN[4]) ? 60 : 1); spec.ops.push({ op: 'keepOnly', srcId: '*', from: 0, to: v }); said.push(`Usar só os primeiros ${fmtDur(v)} do material`); }
+  if (pt != null && /\b(abre|abrir|abra|comeca|comecar|comece|inicia|iniciar|open|start)\w*\s+(o video\s+)?(com|with|pelo|pela)\b/.test(s)) {
+    const m = outToSrc(plan, pt) || { srcId: '*', t: pt };
+    spec.ops.push({ op: 'hookAt', srcId: m.cover ? m.cover.srcId : m.srcId, t: m.cover ? m.cover.in + (pt - m.clip.start - m.cover.offset) : m.t }); spec.hookSeconds = spec.hookSeconds || 3;
+    said.push(`Abrir com o momento de ${fmtTc2(pt)}`);
+  }
+  // --- melhorar geral: pacote de acabamento ---
+  if (/\bmelhorar geral\b/.test(s)) {
+    if (spec.hookSeconds == null) spec.hookSeconds = 3;
+    set('silence.remove', true); set('sfx.density', Math.max(cur.sfx.density, 0.35)); set('sfx.onImpacts', true);
+    const a2 = { ...(over.adjust || {}) }; a2.contrast = Math.max(a2.contrast || 1, 1.08); a2.saturation = Math.max(a2.saturation || 1, 1.08); a2.sharpen = Math.max(a2.sharpen || 0, 0.35); set('adjust', a2);
+    if (!cur.transitions.mix.dissolve && !cur.transitions.mix.whip) set('transitions.mix', { cut: 0.75, dissolve: 0.15, zoom: 0.1 });
+    said.push('Acabamento geral: gancho de 3 s, sem tempo morto, imagem mais nítida e viva, efeitos sonoros leves e transições discretas');
+  }
+  // --- som: equilibrar voz e música ---
+  if (/\barrumar som\b/.test(s)) {
+    au.originalDb = Math.max(au.originalDb || 0, 2); au.musicDb = Math.min(au.musicDb || 0, -2); set('music.duckDb', -14);
+    said.push('Som equilibrado: voz na frente, música abaixando mais quando alguém fala, volume final no padrão das redes (-14 LUFS)');
+  }
+  // --- não gostou, sem dizer do quê ---
+  if (/\bnao gostei refazer\b/.test(s)) {
+    spec._reroll = true; if (!said.some(x => x.startsWith('Outra montagem'))) said.push('Outra montagem, com outras escolhas de tomadas e ritmo');
+    warn.push('Se disser o que incomodou (ritmo, cor, música, legenda ou um trecho), eu mudo exatamente isso.');
+  }
+  // --- música: refrão / entrada tardia ---
+  if (/\bmusica no refrao\b/.test(s)) { spec.music.peak = true; spec.music.start = null; said.push('Música começando na parte mais forte (refrão/drop)'); }
+  if (/\bmusica entra depois\b/.test(s)) {
+    const n = s.match(/(\d+(?:[.,]\d+)?)\s*(s|seg|segundos?)\b/) || s.match(/\b\d{1,2}:(\d{2})\b/);
+    spec.music.enterAt = n ? +String(n[1]).replace(',', '.') : (spec.hookSeconds || 3); spec.music.none = false;
+    said.push(`Música entrando só aos ${fmtN(spec.music.enterAt)} s`);
+  }
+  // --- palavrões ---
+  if (/\bbipar palavroes\b/.test(s)) { const off = /\b(sem bip|nao (bipa|censura)|tira o bip)\b/.test(s); set('bleep', !off); said.push(off ? 'Sem bipe' : 'Bipar palavrões e esconder na legenda (usa a transcrição)'); }
+  // --- enquadramento no rosto e zoom lento ---
+  if (/\benquadrar rosto\b/.test(s)) { set('faceZoom', clamp((over.faceZoom || 1) * 1.12, 1, 1.5)); set('fit', false); said.push('Enquadramento mais fechado no rosto, seguindo a pessoa'); }
+  if (/\b(mais aberto|mais longe|abre mais o enquadramento|afasta|zoom out|wider)\b/.test(s) && !/\bzoom lento\b/.test(s)) { set('faceZoom', clamp((over.faceZoom || 1) / 1.12, 0.85, 1.5)); said.push('Enquadramento mais aberto'); }
+  if (/\bzoom lento\b/.test(s)) { set('slowPush', 1); set('noZoom', false); said.push('Zoom lento e contínuo (aproximando devagar em cada tomada)'); }
+  // --- nitidez ---
+  if (/\b(nitidez|nitido|nitida|sharp\w*|mais definid\w*|definicao|embacad\w*|borrad[oa] demais|ta borrad[oa]|desfocad[oa] demais)\b/.test(s)) {
+    const a3 = { ...(over.adjust || {}) }; const off = neg('(nitidez|sharp)');
+    a3.sharpen = off ? 0 : clamp((a3.sharpen || 0) + 0.5 * times, 0, 1.5); set('adjust', a3); said.push(off ? 'Sem nitidez extra' : 'Imagem mais nítida');
+  }
+  // --- barra de progresso embaixo ---
+  if (/barra de progresso/.test(s) && /\b(embaixo|em baixo|na parte de baixo|bottom|rodape)\b/.test(s)) { set('progressPos', 'bottom'); set('progressBar', true); const i = said.indexOf('Barra de progresso no topo'); if (i >= 0) said[i] = 'Barra de progresso embaixo'; }
+  // --- excluir o pedaço sob a linha do tempo / no meio ---
+  if (plan && /\b(tira|tire|remove|remova|apaga|apague|exclui|exclua|deleta|corta fora|joga fora)\b.{0,25}\b(pedaco|parte|corte|trecho|cena|clipe|take|tomada|isso)\b/.test(s) && !ranges.length && !/\b(silencio|pausa|ahn|muleta|texto|legenda|musica|som)\b/.test(s)) {
+    let pt2 = relPoint(s, plan, ctx); if (pt2 == null && ctx.t != null && /\b(esse|este|essa|esta|isso|this|that)\b/.test(s)) pt2 = ctx.t;
+    if (pt2 != null) { const c = plan.clips.find(x => pt2 >= x.start - 0.001 && pt2 < x.start + x.dur); if (c) { spec.ops.push({ op: 'deleteClip', srcId: c.srcId, in: c.in }); said.push(`Excluir o corte de ${fmtTc2(c.start)} a ${fmtTc2(c.start + c.dur)}`); } }
+    else ask.push('Qual pedaço? Arraste a linha do tempo até ele e diga "tira esse pedaço", ou diga o tempo: "tira de 0:10 a 0:15".');
+  }
+  // --- fonte da legenda sem a palavra "legenda" ---
+  if (!/\blegenda\b/.test(s) && /\b(letra|letras|fonte|font)\b/.test(s)) {
+    const fw = /\b(grossa|grosso|negrito|bold|pesada|gordinha|impacto|forte)\b/.test(s) ? 'anton' : /\b(fina|finas|fininha|leve|delicada|elegante|elegantes|thin|light|serifa)\b/.test(s) ? 'playfair' : /\b(maquina de escrever|typewriter|mono)\b/.test(s) ? 'spacemono' : /\b(escrita a mao|manuscrita|cursiva|handwritten|caneta)\b/.test(s) ? 'caveat' : /\b(divertida|engracada|cartoon|desenho|quadrinho|comic)\b/.test(s) ? 'bangers' : /\b(estreita|condensada|condensed|alta)\b/.test(s) ? 'bebas' : /\b(redonda|arredondada|fofa|rounded)\b/.test(s) ? 'lilita' : /\b(marcador|pincel|grafite|marker)\b/.test(s) ? 'marker' : null;
+    if (fw) { set('captionFont', fw); said.push('Fonte da legenda: ' + fw); }
+    if (/\b(maior|maiores|grande|grandes)\b/.test(s)) { set('captionScale', clamp((over.captionScale || 1) * 1.2, 0.5, 2)); said.push('Letra maior'); }
+    if (/\b(menor|menores|pequena|pequenas)\b/.test(s)) { set('captionScale', clamp((over.captionScale || 1) * 0.82, 0.5, 2)); said.push('Letra menor'); }
+  }
+  // --- várias durações de uma vez: "um de 15 e um de 60 segundos" ---
+  const md = s.match(/\b(\d+(?:\.\d+)?)\s*(s|seg|segundos?|min|minutos?)?\s*(?:,|e|and)\s*(?:(?:um|uma|outra|outro|another|one)\s+)?(?:(?:versao|corte|video)\s+)?(?:de\s+|of\s+)?(\d+(?:\.\d+)?)\s*(s|seg|segundos?|seconds?|min|minutos?|minutes?)?\b(?:\s*(?:,|e|and)\s*(?:(?:um|uma|outra|outro)\s+)?(?:de\s+)?(\d+(?:\.\d+)?)\s*(s|seg|segundos?|min|minutos?)?)?/);
+  if (md && (md[2] || md[4]) && !ranges.length && /\b(versao|versoes|corte|cortes|video|videos|reels|tiktok|shorts|um de|uma de|outra|outro|formatos?|edic\w*|cut|cuts|version)\b/.test(s)) {
+    const unitOf = u => /^min/.test(u || '') ? 60 : 1;
+    const lastU = md[4] || md[2];
+    const ds = [[md[1], md[2] || lastU], [md[3], md[4]], md[5] ? [md[5], md[6] || lastU] : null].filter(Boolean).map(([v, u]) => Math.round(+v * unitOf(u)));
+    const uniq = [...new Set(ds)].filter(x => x >= 3 && x <= 3600);
+    if (uniq.length >= 2) {
+      const plat = (spec.outputs[0] && spec.outputs[0].platform) || 'reels';
+      spec.outputs = uniq.map(d => ({ platform: plat, duration: d, exact: false })); spec.target = null; changed.add('outputs');
+      for (let i = said.length - 1; i >= 0; i--) if (/^(Duração final|Formato:)/.test(said[i])) said.splice(i, 1);
+      said.push(`${uniq.length} cortes: ${uniq.map(fmtDur).join(' e ')} (${PLATFORMS[plat].label})`);
+    }
+  }
+  // --- tipo de transição pelo nome ---
+  const tn = s.match(/\btransic\w*\s+(?:de |com |em |tipo |estilo )?(zoom|chicote|whip|glitch|flash|clarao|fade|dissolve|dissolvencia|suave|mergulho|preto|fusao|corte seco)\b|\b(zoom|chicote|whip|glitch|flash|fade|dissolve|fusao)\s+(?:nas |de |como |entre as )?transic/);
+  if (tn) {
+    const k = tn[1] || tn[2];
+    const id = { zoom: 'zoom', chicote: 'whip', whip: 'whip', glitch: 'glitch', flash: 'flash', clarao: 'flash', fade: 'dissolve', dissolve: 'dissolve', dissolvencia: 'dissolve', suave: 'dissolve', fusao: 'dissolve', mergulho: 'dip', preto: 'dip', 'corte seco': 'cut' }[k];
+    if (id && id !== 'cut') {
+      set('transitions.mix', { cut: 0.4, [id]: 0.6 }); set('transitions.dur', id === 'dissolve' || id === 'dip' ? 0.5 : 0.25);
+      for (let i = said.length - 1; i >= 0; i--) if (/^(Transições|Mais transições|Zoom de ênfase)/.test(said[i])) said.splice(i, 1);
+      said.push(`Transições de ${{ zoom: 'zoom', whip: 'chicote (whip pan)', glitch: 'glitch', flash: 'flash', dissolve: 'fusão suave', dip: 'mergulho no preto' }[id]}`);
+    }
+  }
+  // --- legenda só nas palavras importantes ---
+  if (/\blegenda\b/.test(s) && /\b(so|somente|apenas|only)\b.{0,20}\b(palavras?|words?)\s+(importantes?|chave|fortes?|principais|key|important)\b/.test(s)) { set('captionKeywords', true); said.push('Legenda só nas palavras-chave, uma por vez'); }
+  if (/\blegenda\b/.test(s) && /\b(todas as palavras|tudo que (eu )?falo|completa|inteira|every word|all words)\b/.test(s)) { set('captionKeywords', false); said.push('Legenda com todas as palavras'); }
+  momentRules({ s, spec, prev, plan, ctx, said, ranges });
+  if (/\b(corta|tira|remove)\s+(o |os )?(ultimos?|final|last)\s+(\d+(?:\.\d+)?)\s*(s|seg\w*|sec\w*)/.test(s) && plan) {
+    const n = +s.match(/(\d+(?:\.\d+)?)\s*(s|seg|sec)/)[1]; const tgt = Math.max(3, plan.duration - n);
+    spec.target = { seconds: tgt, exact: true }; spec.outputs = spec.outputs.map(o => ({ ...o, duration: tgt, exact: true })); said.push(`Cortar ${fmtN(n)} s do final (fica ${fmtDur(tgt)})`);
+  }
+}

@@ -13,13 +13,22 @@ const RAMP_V = u => 1 - 0.6 * Math.pow(Math.sin(Math.PI * u), 2);
 export function visualSegments(plan) {
   const segs = [];
   for (const c of plan.clips) {
-    const base = { clipId: c.id, kind: c.kind, zoom: c.zoom || [1, 1], clipStart: c.start, clipDur: c.dur, focus: c.focus || [], face: !!c.face, lum: c.lum, fit: c.fit || plan.fit || false };
-    if (c.cover && c.speed === 1) {
-      const off = c.cover.offset, cd = c.cover.out - c.cover.in;
-      const a = { ...base, id: c.id + 'a', srcId: c.srcId, start: c.start, dur: off, in: c.in, speed: 1, trans: c.trans };
-      const cov = { ...base, id: c.id + 'c', srcId: c.cover.srcId, start: c.start + off, dur: cd, in: c.cover.in, speed: 1, trans: { type: 'cut', dur: 0 }, kind: 'cover', focus: c.cover.focus || [], face: !!c.cover.face, lum: c.cover.lum, zoom: [1.0, 1.06] };
-      const b = { ...base, id: c.id + 'b', srcId: c.srcId, start: c.start + off + cd, dur: c.dur - off - cd, in: c.in + off + cd, speed: 1, trans: { type: 'cut', dur: 0 } };
-      for (const x of [a, cov, b]) if (x.dur > 0.02) segs.push(x);
+    const base = { clipId: c.id, kind: c.kind, zoom: c.zoom || [1, 1], clipStart: c.start, clipDur: c.dur, focus: c.focus || [], face: !!c.face, lum: c.lum, fit: c.fit || plan.fit || false, still: !!c.still };
+    const covers = (c.covers || []).filter(x => x.len > 0.02).sort((a, b) => a.offset - b.offset);
+    if (covers.length && c.speed === 1) {
+      const mainHasVideo = !c.noVideo;
+      let t = 0; let k = 0;
+      const pushMain = (from, to, first) => { if (to - from > 0.02) segs.push({ ...base, id: c.id + 'm' + (k++), srcId: c.srcId, start: c.start + from, dur: to - from, in: c.in + from, speed: 1, trans: first ? c.trans : { type: 'cut', dur: 0 } }); };
+      covers.forEach((cv, i) => {
+        if (cv.offset > t + 0.02) { if (mainHasVideo) pushMain(t, cv.offset, t === 0); else if (segs.length) segs[segs.length - 1].dur += cv.offset - t; }
+        const len = Math.min(cv.len, c.dur - cv.offset);
+        const first = cv.offset < 0.02;
+        // fotos ganham movimento lento alternado (Ken Burns); vídeo de apoio, um empurrão leve
+        const kb = cv.still ? (i % 2 ? [1.14, 1.02] : [1.02, 1.14]) : [1.0, 1.06];
+        segs.push({ ...base, id: c.id + 'c' + i, srcId: cv.srcId, start: c.start + cv.offset, dur: len, in: cv.in, speed: 1, trans: first ? c.trans : (mainHasVideo ? { type: 'cut', dur: 0 } : (cv.trans || { type: 'cut', dur: 0 })), kind: 'cover', focus: cv.focus || [], face: !!cv.face, lum: cv.lum, zoom: kb, clipStart: c.start + cv.offset, clipDur: len, still: !!cv.still });
+        t = cv.offset + len;
+      });
+      if (t < c.dur - 0.02) { if (mainHasVideo) pushMain(t, c.dur, false); else segs[segs.length - 1].dur += c.dur - t; }
     } else {
       segs.push({ ...base, id: c.id, srcId: c.srcId, start: c.start, dur: c.dur, in: c.in, speed: c.speed, srcDur: c.out - c.in, trans: c.trans || { type: 'cut', dur: 0 } });
     }
@@ -35,6 +44,7 @@ export function visualSegments(plan) {
 }
 
 export function srcTime(seg, t) {
+  if (seg.speed === 'freeze') return seg.in;
   const u = (t - seg.start) / seg.dur;
   if (seg.speed === 'ramp') {
     const total = seg.srcDur || seg.dur * 0.7;
@@ -44,7 +54,7 @@ export function srcTime(seg, t) {
   }
   return seg.in + (t - seg.start) * seg.speed;
 }
-const rateAt = (seg, t) => seg.speed === 'ramp' ? RAMP_V(clamp((t - seg.start) / seg.dur, 0, 1)) : seg.speed;
+const rateAt = (seg, t) => seg.speed === 'ramp' ? RAMP_V(clamp((t - seg.start) / seg.dur, 0, 1)) : seg.speed === 'freeze' ? 0 : seg.speed;
 
 function focusAt(seg, sT) {
   const p = seg.focus; if (!p || !p.length) return { x: 0.5, y: 0.45 };
@@ -79,6 +89,7 @@ export class Renderer {
     const ids = [...new Set(this.segs.map(s => s.srcId))];
     for (const id of ids) {
       const src = this.getSrc(id);
+      if (src.kind === 'image') { this.pools.set(id, [{ el: src.img, seg: null, still: true }, { el: src.img, seg: null, still: true }, { el: src.img, seg: null, still: true }]); continue; }
       const els = [];
       const need = Math.min(4, 1 + this.segs.filter(s => s.srcId === id).length);
       for (let i = 0; i < Math.max(2, Math.min(3, need)); i++) {
@@ -89,7 +100,7 @@ export class Renderer {
       }
       this.pools.set(id, els);
     }
-    await Promise.all([...this.pools.values()].flat().map(x => new Promise(res => { if (x.el.readyState >= 2) return res(); x.el.addEventListener('loadeddata', res, { once: true }); x.el.addEventListener('error', res, { once: true }); setTimeout(res, 15000); })));
+    await Promise.all([...this.pools.values()].flat().filter(x => !x.still).map(x => new Promise(res => { if (x.el.readyState >= 2) return res(); x.el.addEventListener('loadeddata', res, { once: true }); x.el.addEventListener('error', res, { once: true }); setTimeout(res, 15000); })));
     onProgress(0.3, 'Mixando o som');
     const mix = await renderMix(this.plan, this.getSrc, { onProgress: p => onProgress(0.3 + p * 0.6, 'Mixando o som') });
     this.mix = mix;
@@ -99,7 +110,7 @@ export class Renderer {
 
   dispose() {
     this.stop();
-    for (const arr of this.pools.values()) for (const x of arr) { x.el.pause(); x.el.removeAttribute('src'); x.el.load(); }
+    for (const arr of this.pools.values()) for (const x of arr) { if (x.still) continue; x.el.pause(); x.el.removeAttribute('src'); x.el.load(); }
     this.pools.clear();
   }
 
@@ -112,13 +123,14 @@ export class Renderer {
     if (!a) return null;
     if (a.seg) this.assign.delete(a.seg.id);
     a.seg = seg; this.assign.set(seg.id, a);
+    if (a.still) return a;
     a.el.pause();
     const target = srcTime(seg, Math.max(t, seg.a0));
     a.el.currentTime = Math.max(0, target);
     a.prepared = true; a.playingSeg = false;
     return a;
   }
-  release(seg) { const a = this.assign.get(seg.id); if (a) { a.el.pause(); a.seg = null; a.playingSeg = false; this.assign.delete(seg.id); } }
+  release(seg) { const a = this.assign.get(seg.id); if (a) { if (!a.still) a.el.pause(); a.seg = null; a.playingSeg = false; this.assign.delete(seg.id); } }
 
   schedule(t, live) {
     const active = [], soon = [];
@@ -129,8 +141,9 @@ export class Renderer {
     for (const s of [...this.assign.values()].map(a => a.seg)) if (s && (t >= s.a1 + 0.05 || t < s.a0 - 2)) this.release(s);
     for (const s of active) {
       const a = this.elFor(s, t);
-      if (!a) continue;
+      if (!a || a.still) continue;
       const want = srcTime(s, t);
+      if (live && s.speed === 'freeze') { if (!a.el.paused) a.el.pause(); if (Math.abs(a.el.currentTime - want) > 0.05 && !a.el.seeking) a.el.currentTime = want; continue; }
       if (live) {
         const r = clamp(rateAt(s, t), 0.25, 2);
         if (Math.abs(a.el.playbackRate - r) > 0.01) a.el.playbackRate = r;
@@ -149,11 +162,11 @@ export class Renderer {
     const src = this.getSrc(seg.srcId);
     const sT = srcTime(seg, t);
     const u = clamp((t - seg.clipStart) / Math.max(0.01, seg.clipDur), 0, 1);
-    const z = seg.zoom[0] + (seg.zoom[1] - seg.zoom[0]) * (u * u * (3 - 2 * u));
+    const z = (seg.zoom[0] + (seg.zoom[1] - seg.zoom[0]) * (u * u * (3 - 2 * u))) * this.fxZoom(t);
     const f = focusAt(seg, sT);
     const lum = seg.lum;
     const exp = lum == null ? 0 : lum < 0.28 ? clamp(Math.log2(0.36 / Math.max(lum, 0.03)) * 0.55, 0, 0.9) : lum > 0.78 ? clamp(Math.log2(0.6 / lum) * 0.6, -0.7, 0) : 0;
-    const ready = a.el.readyState >= 2 && !a.el.seeking;
+    const ready = a.still ? true : a.el.readyState >= 2 && !a.el.seeking;
     const sw = src.width || a.el.videoWidth, sh = src.height || a.el.videoHeight;
     return {
       el: ready ? a.el : null, ready,
@@ -161,6 +174,18 @@ export class Renderer {
       fit: seg.fit, fitRect: seg.fit ? fitRect(sw, sh, this.W, this.H, z) : null,
       exp, f,
     };
+  }
+
+  // zoom extra dos efeitos: pulso na batida e zoom nas palavras fortes
+  fxZoom(t) {
+    let z = 1;
+    for (const fx of this.plan.fx) {
+      if (t < fx.t || t > fx.t + fx.dur) continue;
+      const k = (t - fx.t) / fx.dur;
+      if (fx.kind === 'pulse') z *= 1 + fx.amt * 0.06 * Math.pow(1 - k, 2);
+      if (fx.kind === 'punch') z *= 1 + fx.amt * (k < 0.15 ? k / 0.15 : 1);
+    }
+    return z;
   }
 
   drawAt(t) {
@@ -185,6 +210,7 @@ export class Renderer {
       const k = 1 - (t - fx.t) / fx.dur;
       if (fx.kind === 'shake') { const a = 0.018 * fx.amt * k; shake = [shake[0] + a * Math.sin(t * 97), shake[1] + a * Math.cos(t * 83)]; }
       if (fx.kind === 'flash') flash = Math.max(flash, fx.amt * k * k * 0.85);
+      if (fx.kind === 'pulse') flash = Math.max(flash, fx.amt * 0.12 * k * k);
     }
     if (trans === 'flash' && B) flash = Math.max(flash, Math.pow(1 - Math.abs(mix - 0.5) * 2, 2) * 0.95);
     // fade de entrada/saída do vídeo
@@ -192,7 +218,7 @@ export class Renderer {
     const fadeOut = clamp((T - t) / 0.5, 0, 1), fadeIn = clamp(t / 0.25, 0, 1);
     const lb = plan.letterbox && this.W > this.H ? 0.12 : plan.letterbox ? 0 : 0;
     if (A) {
-      this.comp.draw({ A: A.ready ? A : { ...A, el: null }, B: B && B.ready ? B : (B ? { ...B, el: null } : null), mix, trans, shake, flash, look: plan.look.id, intensity: plan.look.intensity, grainOver: plan.look.grain, letterbox: lb, leak: plan.lightLeak * (trans !== 'cut' ? 1 - Math.abs(mix - 0.5) * 2 : 0.15), time: t, skin: 1 });
+      this.comp.draw({ A: A.ready ? A : { ...A, el: null }, B: B && B.ready ? B : (B ? { ...B, el: null } : null), mix, trans, shake, flash, look: plan.look.id, intensity: plan.look.intensity, grainOver: plan.look.grain, letterbox: lb, leak: plan.lightLeak * (trans !== 'cut' ? 1 - Math.abs(mix - 0.5) * 2 : 0.15), time: t, skin: 1, adjust: plan.adjust, mirror: plan.mirror });
     }
     const c = this.ctx;
     c.globalAlpha = 1; c.drawImage(this.glCanvas, 0, 0);
@@ -208,7 +234,7 @@ export class Renderer {
     const active = this.segs.filter(s => t >= s.a0 && t < s.a1);
     for (const s of active) {
       const a = this.elFor(s, t);
-      if (!a) continue;
+      if (!a || a.still) continue;
       const want = srcTime(s, t);
       a.el.pause();
       if (Math.abs(a.el.currentTime - want) > 0.01) { a.el.currentTime = want; await new Promise(r => { a.el.addEventListener('seeked', r, { once: true }); setTimeout(r, 4000); }); }
@@ -227,7 +253,7 @@ export class Renderer {
     let dest = null; if (stream) { dest = ac.createMediaStreamDestination(); node.connect(dest); }
     // prepara os primeiros vídeos antes de soltar o som
     this.schedule(from, false);
-    await Promise.all([...this.assign.values()].map(a => a.el.seeking ? new Promise(r => { a.el.addEventListener('seeked', r, { once: true }); setTimeout(r, 4000); }) : null));
+    await Promise.all([...this.assign.values()].map(a => !a.still && a.el.seeking ? new Promise(r => { a.el.addEventListener('seeked', r, { once: true }); setTimeout(r, 4000); }) : null));
     await ac.resume();
     const t0 = ac.currentTime + 0.12;
     node.start(t0, from);
@@ -251,7 +277,7 @@ export class Renderer {
     if (this.raf) cancelAnimationFrame(this.raf);
     try { this.node && this.node.stop(); } catch (e) {}
     if (this.ac) { this.ac.close().catch(() => {}); this.ac = null; }
-    for (const a of this.assign.values()) a.el.pause();
+    for (const a of this.assign.values()) if (!a.still) a.el.pause();
   }
 
   // ----- exportar MP4 (tempo real) -----

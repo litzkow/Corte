@@ -1,0 +1,37 @@
+<!doctype html><meta charset=utf-8><body style="margin:0"><canvas id=c></canvas><script type=module>
+import { loadSource } from '../js/engine/media.js';
+import { analyzeSource, analyzeMusicSource } from '../js/engine/pipeline.js';
+import { interpret } from '../js/engine/director.js';
+import { buildPlan } from '../js/engine/planner.js';
+import { Renderer } from '../js/engine/render.js';
+import { referenceProfile, applyReference } from '../js/engine/reference.js';
+const r = window.__r = { steps: [] };
+try {
+  const talk = await loadSource('/media/talk.mp4'), broll = await loadSource('/media/broll.mp4'), mus = await loadSource('/media/music_clip.mp4', { role: 'music' });
+  const srcs = { [talk.id]: talk, [broll.id]: broll, [mus.id]: mus };
+  const it1 = await analyzeSource(talk), it2 = await analyzeSource(broll); const m = await analyzeMusicSource(mus);
+  const items = [it2];
+  let res = interpret('tiktok de 15 segundos estilo ação com zoom na batida, barra de progresso e manchete "O MAIOR SEGREDO"');
+  let plan = buildPlan({ spec: res.spec, items, music: m });
+  const step = async (cmd) => {
+    const x = interpret(cmd, res.spec, { plan });
+    res = x; plan = buildPlan({ spec: x.spec, items, music: m });
+    r.steps.push({ cmd, said: x.said, ask: x.ask, dur: +plan.duration.toFixed(2), clips: plan.clips.length, fx: plan.fx.map(f => f.kind).filter((v, i, a) => a.indexOf(v) === i), fit: plan.fit, mirror: plan.mirror, adjust: plan.adjust, ops: x.spec.ops.map(o => o.op) });
+  };
+  r.steps.push({ cmd: 'inicial', dur: plan.duration, overlays: plan.overlays.map(o => o.kind), fx: [...new Set(plan.fx.map(f => f.kind))] });
+  await step('mostra o vídeo inteiro com fundo desfocado, espelhado e um pouco mais claro');
+  await step('tira o trecho de 0:03 a 0:05');
+  await step('congela em 0:08 por 1 segundo');
+  await step('abre com o momento de 0:10');
+  // referência: o vídeo de fala como modelo
+  const prof = referenceProfile(it1); r.ref = prof.lines;
+  const sp = applyReference(JSON.parse(JSON.stringify(res.spec)), prof);
+  const p2 = buildPlan({ spec: sp, items, music: m }); r.refPlan = { avgShot: +(p2.duration / p2.clips.length).toFixed(2), look: p2.look.id };
+  const rd = new Renderer({ plan, getSrc: id => srcs[id], canvas: document.getElementById('c'), scale: 0.3 });
+  await rd.prepare();
+  const frames = [];
+  for (const t of [0.4, 2, 4, 6, 8.3, 10, 12, 14]) { await rd.frameAt(Math.min(t, plan.duration - 0.1)); frames.push(document.getElementById('c').toDataURL('image/jpeg', 0.7)); }
+  window.__frames = frames;
+} catch (e) { r.error = String(e.stack || e); }
+window.__done = true;
+</script>

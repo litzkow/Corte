@@ -30,7 +30,9 @@ export async function renderMix(plan, getSrc, { onProgress } = {}) {
   const ctx = new OfflineAudioContext(2, Math.ceil(total * SR) + SR / 10, SR);
   const bus = ctx.createGain(); bus.connect(ctx.destination);
   const a = plan.audio;
-  // --- som dos cortes ---
+  // --- som dos cortes (passa por um barramento de fala, que pode ser silenciado nos palavrões) ---
+  const speech = ctx.createGain(); speech.connect(bus);
+  for (const m of a.mutes || []) { const s0 = Math.max(0, m.start - 0.01); speech.gain.setValueAtTime(1, s0); speech.gain.linearRampToValueAtTime(0, s0 + 0.01); speech.gain.setValueAtTime(0, m.end); speech.gain.linearRampToValueAtTime(1, m.end + 0.01); }
   for (const tr of a.tracks) {
     const src = getSrc(tr.srcId); if (!src) continue;
     const buf = await sourceAudio48k(src); if (!buf) continue;
@@ -38,7 +40,7 @@ export async function renderMix(plan, getSrc, { onProgress } = {}) {
     const g = ctx.createGain();
     const dur = (tr.out - tr.in);
     scheduleFade(g, tr.start, dur, tr.fadeIn || 0.012, tr.fadeOut || 0.012, dbToGain(tr.gainDb));
-    n.connect(g); g.connect(bus);
+    n.connect(g); g.connect(speech);
     n.start(tr.start, Math.max(0, tr.in), dur);
   }
   // --- música ---
@@ -60,7 +62,7 @@ export async function renderMix(plan, getSrc, { onProgress } = {}) {
         last = e1;
       }
       if (m.swellAtEnd && m.dur > 8) {
-        const s0 = Math.max(last, m.dur * 0.72), s1 = m.dur - m.fadeOut;
+        const s0 = Math.max(last, m.start + m.dur * 0.72), s1 = m.start + m.dur - m.fadeOut;
         if (s1 > s0 + 0.5) { lvl.gain.setValueAtTime(L, s0); lvl.gain.linearRampToValueAtTime(L * dbToGain(3), s1); }
       }
       const avail = Math.max(0.1, buf.duration - m.in);
@@ -78,6 +80,7 @@ export async function renderMix(plan, getSrc, { onProgress } = {}) {
     n.connect(g); g.connect(bus);
     const st = s.t - (SFX_ANCHOR[s.kind] || 0);
     if (st >= 0) n.start(st); else n.start(0, -st);
+    if (s.dur) n.stop(Math.max(0, st) + s.dur);
   });
   onProgress && onProgress(0.3);
   const out = await ctx.startRendering();

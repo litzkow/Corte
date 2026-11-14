@@ -11,8 +11,8 @@ export const isMobile = () => /iPhone|iPad|iPod|Android/i.test(navigator.userAge
 
 export function validateFile(file) {
   const errs = [];
-  const okType = /^(video|audio)\//.test(file.type) || /\.(mp4|mov|m4v|webm|mkv|mp3|m4a|wav|aac|ogg|flac)$/i.test(file.name);
-  if (!okType) errs.push(`"${file.name}" não parece ser vídeo ou áudio.`);
+  const okType = /^(video|audio|image)\//.test(file.type) || /\.(mp4|mov|m4v|webm|mkv|mp3|m4a|wav|aac|ogg|flac|jpe?g|png|webp|heic|gif)$/i.test(file.name);
+  if (!okType) errs.push(`"${file.name}" não parece ser vídeo, áudio ou foto.`);
   const max = isMobile() ? LIMITS.maxBytesMobile : LIMITS.maxBytesDesktop;
   if (file.size > max) errs.push(`"${file.name}" tem ${(file.size / 1e9).toFixed(1)} GB. Neste aparelho o limite seguro é ${(max / 1e9).toFixed(1)} GB${isMobile() ? '. Vídeos longos funcionam melhor no computador, pelo Chrome' : ''}.`);
   return errs;
@@ -28,11 +28,18 @@ function waitEvent(el, ok, bad = 'error', timeout = 30000) {
   });
 }
 
+export const IMAGE_DUR = 600; // foto vira um "vídeo parado" bem longo; o plano usa só o que precisa
+
 export async function loadSource(fileOrUrl, opts = {}) {
   const isFile = typeof fileOrUrl !== 'string';
   const url = isFile ? URL.createObjectURL(fileOrUrl) : fileOrUrl;
   const name = isFile ? fileOrUrl.name : fileOrUrl.split('/').pop();
   const type = isFile ? fileOrUrl.type : '';
+  if (/^image\//.test(type) || /\.(jpe?g|png|webp|heic|gif)$/i.test(name)) {
+    const img = new Image(); img.decoding = 'async'; img.src = url;
+    await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error('não consegui abrir a foto (HEIC só abre no Safari)')); });
+    return { id: opts.id || uid('src'), name, url, file: isFile ? fileOrUrl : null, size: isFile ? fileOrUrl.size : 0, kind: 'image', duration: IMAGE_DUR, width: img.naturalWidth, height: img.naturalHeight, role: opts.role || 'footage', img };
+  }
   const audioOnly = /^audio\//.test(type) || /\.(mp3|m4a|wav|aac|ogg|flac)$/i.test(name);
   const el = document.createElement(audioOnly ? 'audio' : 'video');
   el.preload = 'metadata'; el.muted = true; el.playsInline = true; el.crossOrigin = 'anonymous';
@@ -46,7 +53,7 @@ export async function loadSource(fileOrUrl, opts = {}) {
     id: opts.id || uid('src'), name, url, file: isFile ? fileOrUrl : null, size: isFile ? fileOrUrl.size : 0,
     kind: audioOnly || !el.videoWidth ? 'audio' : 'video',
     duration, width: el.videoWidth || 0, height: el.videoHeight || 0,
-    role: opts.role || (audioOnly ? 'music' : 'footage'),
+    role: opts.role || (audioOnly ? 'audio' : 'footage'),
   };
   el.removeAttribute('src'); el.load();
   return src;
@@ -59,6 +66,7 @@ async function getBytes(src) {
 
 // Decodifica o áudio para uma taxa e número de canais; devolve AudioBuffer ou null se não houver áudio.
 export async function decodeAudio(src, sampleRate = 16000, channels = 1) {
+  if (src.kind === 'image') return null;
   const bytes = await getBytes(src);
   const frames = Math.max(1, Math.ceil(src.duration * sampleRate));
   const ctx = new OfflineAudioContext(channels, frames, sampleRate);

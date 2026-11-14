@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Testes do diretor
-        run: node tests/director.test.mjs
+        run: node tests/director.test.mjs && node tests/corpus.test.mjs
       - name: Montar o site
         run: |
           mkdir -p _site

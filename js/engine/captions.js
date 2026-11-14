@@ -74,7 +74,7 @@ export function markEmphasis(words) {
 // Agrupa palavras em frases curtas que cabem na tela.
 export function groupWords(words, style, W) {
   const st = CAPTION_STYLES[style] || CAPTION_STYLES.clean;
-  const maxW = st.maxWords;
+  const maxW = words.length && words[0].solo ? 1 : st.maxWords;
   const groups = [];
   let cur = [];
   const flush = () => { if (cur.length) groups.push({ words: cur, t0: cur[0].t0, t1: cur[cur.length - 1].t1 }); cur = []; };
@@ -130,7 +130,9 @@ function drawWord(ctx, st, text, x, y, px, opt) {
 
 // Desenha a legenda do instante t. area = {x,y,w,h} seguro; cy = centro vertical desejado.
 export function drawCaption(ctx, groups, t, styleId, area, cy, opts = {}) {
-  const st = CAPTION_STYLES[styleId] || CAPTION_STYLES.clean;
+  const st0 = CAPTION_STYLES[styleId] || CAPTION_STYLES.clean;
+  // cor e fonte escolhidas pela pessoa por cima do estilo
+  const st = { ...st0, ...(opts.font ? { font: opts.font, weight: 900 } : {}), ...(opts.color ? { active: { ...(st0.active || { scale: 1.08 }), fill: st0.active && st0.active.box ? st0.active.fill : opts.color, box: st0.active && st0.active.box ? opts.color : undefined }, emph: st0.emph ? { ...st0.emph, fill: opts.color } : { fill: opts.color }, sweep: st0.sweep ? opts.color : undefined } : {}) };
   const gi = groups.findIndex(g => t >= g.t0 - 0.05 && t < g.hold);
   if (gi < 0) return;
   const g = groups[gi];
@@ -357,6 +359,37 @@ export function drawTitle(ctx, el, t, W, H) {
   ctx.restore();
 }
 
+// Manchete no topo (o "título" que todo Reel/TikTok de sucesso tem nos primeiros segundos).
+export function drawHeadline(ctx, el, t, area, W, H) {
+  const age = t - el.start; if (age < 0 || age > el.dur) return;
+  const a = clamp(age / 0.25, 0, 1) * clamp((el.dur - age) / 0.25, 0, 1);
+  const px = Math.min(W, H) * 0.062;
+  ctx.save(); ctx.globalAlpha = a;
+  ctx.font = `${wgtFor('montserrat', 800)} ${px}px ${fam('montserrat')}`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  // quebra em linhas
+  const words = String(el.text).split(/\s+/); const lines = []; let cur = '';
+  const maxW = area.w * 0.86;
+  for (const w of words) { const tr = cur ? cur + ' ' + w : w; if (ctx.measureText(tr).width > maxW && cur) { lines.push(cur); cur = w; } else cur = tr; }
+  if (cur) lines.push(cur);
+  const lh = px * 1.22, y0 = area.y + px * 0.9 + (1 - ease.out(clamp(age / 0.35, 0, 1))) * -px;
+  const cx = area.x + area.w / 2;
+  lines.forEach((ln, i) => {
+    const y = y0 + i * lh, w = ctx.measureText(ln).width;
+    if (el.style === 'bold') { ctx.lineJoin = 'round'; ctx.strokeStyle = '#000'; ctx.lineWidth = px * 0.22; ctx.strokeText(ln, cx, y); ctx.fillStyle = '#fff'; ctx.fillText(ln, cx, y); }
+    else { ctx.fillStyle = el.bg || '#FFFFFF'; roundRect(ctx, cx - w / 2 - px * 0.35, y - lh / 2, w + px * 0.7, lh, px * 0.22); ctx.fill(); ctx.fillStyle = el.color || '#111111'; ctx.fillText(ln, cx, y + px * 0.03); }
+  });
+  ctx.restore();
+}
+
+// Barra de progresso (segura a pessoa até o fim).
+export function drawProgress(ctx, el, t, W, H, total) {
+  const h = Math.max(4, H * 0.006);
+  const y = el.pos === 'bottom' ? H - h : 0;
+  ctx.save(); ctx.fillStyle = 'rgba(255,255,255,.25)'; ctx.fillRect(0, y, W, h);
+  ctx.fillStyle = el.color || '#FFB547'; ctx.fillRect(0, y, W * clamp(t / total, 0, 1), h); ctx.restore();
+}
+
 // Camada de textos usada pelo renderizador.
 export class Overlays {
   constructor(plan) {
@@ -374,6 +407,8 @@ export class Overlays {
     for (const el of p.overlays || []) {
       if (el.kind === 'shape') drawShape(ctx, el, t, W, H, this.subjectAt ? this.subjectAt(t) : null);
       else if (el.kind === 'title') drawTitle(ctx, el, t, W, H);
+      else if (el.kind === 'headline') drawHeadline(ctx, el, t, area, W, H);
+      else if (el.kind === 'progress') drawProgress(ctx, el, t, W, H, p.duration);
     }
     if (p.captionsOn !== false && this.groups.length) {
       const cy = (p.captionY != null ? p.captionY : fmt.captionY) * H;
@@ -382,6 +417,7 @@ export class Overlays {
   }
   fontsUsed() {
     const ids = new Set([(CAPTION_STYLES[this.plan.captionStyle] || CAPTION_STYLES.clean).font, 'montserrat', 'bebas']);
+    if (this.plan.captionOpts && this.plan.captionOpts.font) ids.add(this.plan.captionOpts.font);
     const em = (CAPTION_STYLES[this.plan.captionStyle] || {}).emph; if (em && em.font) ids.add(em.font);
     for (const el of this.plan.overlays || []) if (el.font) ids.add(el.font); else ids.add('montserrat');
     ids.add('playfair');

@@ -17,7 +17,7 @@ uniform vec2 uShake; uniform float uFlash;
 uniform float uExpA, uExpB;       // correção automática de exposição por corte (stops)
 uniform float uExposure, uContrast, uSat, uTemp, uTint, uFade, uVignette, uGrain, uIntensity, uSkin, uTime;
 uniform vec3 uLift, uGamma, uGain;
-uniform float uLetterbox, uLeak; uniform vec2 uRes;
+uniform float uLetterbox, uLeak, uMirror, uSharp; uniform vec2 uRes;
 
 float hash(vec2 p){ p = fract(p*vec2(123.34, 456.21)); p += dot(p, p+45.32); return fract(p.x*p.y); }
 
@@ -91,8 +91,10 @@ vec3 grade(vec3 c){
 }
 
 void main(){
-  vec2 q = vec2(uv.x, 1.0-uv.y) + uShake;
-  vec3 c = grade(composite(q));
+  vec2 q = vec2(uMirror > 0.5 ? 1.0-uv.x : uv.x, 1.0-uv.y) + uShake;
+  vec3 c0 = composite(q);
+  if (uSharp > 0.0 && uHasB < 0.5) { vec2 px = 1.5/uRes; vec3 nb = sampA(q+vec2(px.x,0.0))+sampA(q-vec2(px.x,0.0))+sampA(q+vec2(0.0,px.y))+sampA(q-vec2(0.0,px.y)); c0 = clamp(c0 + uSharp*(c0 - nb*0.25), 0.0, 1.0); }
+  vec3 c = grade(c0);
   // vinheta
   vec2 d = (uv-0.5)*vec2(uRes.x/uRes.y, 1.0);
   float vig = smoothstep(0.9, 0.25, length(d)*(0.9+0.4*min(1.0,uRes.y/uRes.x)));
@@ -153,13 +155,17 @@ export class Compositor {
     return true;
   }
   // layer = { el, crop:[x,y,w,h], fit, fitRect:[x,y,w,h], exp }
-  draw({ A, B, mix = 0, trans = 'cut', shake = [0, 0], flash = 0, look = 'natural', intensity = 0.8, grainOver = null, letterbox = 0, leak = 0, time = 0, skin = 1 }) {
+  draw({ A, B, mix = 0, trans = 'cut', shake = [0, 0], flash = 0, look = 'natural', intensity = 0.8, grainOver = null, letterbox = 0, leak = 0, time = 0, skin = 1, adjust = null, mirror = false }) {
     const gl = this.gl, u = this.u;
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     if (A && A.el) this.upload(0, A.el, !!A.fit);
     const hasB = !!(B && B.el);
     if (hasB) this.upload(1, B.el, !!B.fit);
-    const L = LOOKS[look] || LOOKS.natural;
+    const L0 = LOOKS[look] || LOOKS.natural;
+    const a = adjust || {};
+    // ajustes da pessoa por cima do look (luz, contraste, saturação, temperatura, vinheta, grão)
+    const L = { ...L0, exposure: L0.exposure + (a.exposure || 0), contrast: L0.contrast * (a.contrast || 1), saturation: L0.saturation * (a.saturation != null ? a.saturation : 1), temp: L0.temp + (a.temp || 0), vignette: a.vignette != null ? a.vignette : L0.vignette, grain: a.grain != null ? a.grain : L0.grain };
+    if (a.saturation != null || a.exposure || a.contrast || a.temp) intensity = Math.max(intensity, 0.9);
     const v4 = (n, a) => gl.uniform4f(u[n], a[0], a[1], a[2], a[3]);
     v4('uCropA', A ? A.crop : [0, 0, 1, 1]); v4('uCropB', hasB ? B.crop : [0, 0, 1, 1]);
     gl.uniform1f(u.uFitA, A && A.fit ? 1 : 0); gl.uniform1f(u.uFitB, hasB && B.fit ? 1 : 0);
@@ -170,9 +176,9 @@ export class Compositor {
     gl.uniform1f(u.uExposure, L.exposure); gl.uniform1f(u.uContrast, L.contrast); gl.uniform1f(u.uSat, L.saturation);
     gl.uniform1f(u.uTemp, L.temp); gl.uniform1f(u.uTint, L.tint); gl.uniform1f(u.uFade, L.fade);
     gl.uniform3f(u.uLift, ...L.lift); gl.uniform3f(u.uGamma, ...L.gamma); gl.uniform3f(u.uGain, ...L.gain);
-    gl.uniform1f(u.uVignette, L.vignette * Math.min(1, intensity * 1.2)); gl.uniform1f(u.uGrain, grainOver != null ? grainOver : L.grain);
+    gl.uniform1f(u.uVignette, L.vignette * Math.min(1, intensity * 1.2)); gl.uniform1f(u.uGrain, a.grain != null ? a.grain : (grainOver != null ? grainOver : L.grain));
     gl.uniform1f(u.uIntensity, intensity); gl.uniform1f(u.uSkin, skin); gl.uniform1f(u.uTime, time);
-    gl.uniform1f(u.uLetterbox, letterbox); gl.uniform1f(u.uLeak, leak); gl.uniform2f(u.uRes, this.canvas.width, this.canvas.height);
+    gl.uniform1f(u.uLetterbox, letterbox); gl.uniform1f(u.uLeak, leak); gl.uniform1f(u.uMirror, mirror ? 1 : 0); gl.uniform1f(u.uSharp, a.sharpen || 0); gl.uniform2f(u.uRes, this.canvas.width, this.canvas.height);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 }

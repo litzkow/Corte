@@ -5,27 +5,62 @@ import { makeFormat } from './platforms.js';
 import { bestMusicWindow, HOP_S } from './analyze-audio.js';
 import { smoothPath } from './analyze-video.js';
 import { clamp, mulberry32, uid, mergeIntervals, totalLen, invertIntervals } from './util.js';
+import { markEmphasis as markEmph } from './captions.js';
+import { findFillers } from './transcribe.js';
 
 const avgOver = (arr, a, b) => { const i0 = Math.max(0, Math.floor(a / HOP_S)), i1 = Math.min(arr.length, Math.ceil(b / HOP_S)); let s = 0; for (let i = i0; i < i1; i++) s += arr[i]; return i1 > i0 ? s / (i1 - i0) : 0; };
 const shotAt = (va, t) => va ? va.shots.find(s => t >= s.start - 1e-3 && t < s.end) || va.shots[va.shots.length - 1] : null;
 
 // ---------- 1. Material: o que existe de bom em cada fonte ----------
-export function materialUnits(item, E) {
+export function materialUnits(item, E, transcript = null, ops = []) {
+  const r = materialUnitsRaw(item, E, transcript);
+  // trechos que a pessoa mandou tirar ou manter
+  const mine = o => o.srcId === '*' || o.srcId === item.src.id;
+  const excl = ops.filter(o => o.op === 'excludeSrc' && mine(o));
+  const keep = ops.filter(o => o.op === 'keepOnly' && mine(o));
+  if (!excl.length && !keep.length) return r;
+  let units = r.units;
+  const cutOut = (list, a, b) => list.flatMap(u => b <= u.start || a >= u.end ? [u] : [{ ...u, end: a, dur: a - u.start }, { ...u, id: uid('u'), start: b, dur: u.end - b, cutAfter: u.cutAfter }].filter(x => x.end - x.start > 0.2));
+  for (const x of excl) units = cutOut(units, x.from, x.to).map(u => (u.end <= x.from + 0.01 && u.end >= x.from - 0.3) ? { ...u, cutAfter: true } : u);
+  if (keep.length) units = units.flatMap(u => keep.map(k => ({ ...u, start: Math.max(u.start, k.from), end: Math.min(u.end, k.to) })).filter(x => x.end - x.start > 0.2).map(x => ({ ...x, dur: x.end - x.start })));
+  units.forEach(u => { u.events = (u.events || []).filter(e => e.t >= u.start && e.t < u.end); });
+  return { ...r, units };
+}
+
+function materialUnitsRaw(item, E, transcript = null) {
   const { src, audio, video } = item;
   const out = [];
-  const isDialogue = audio && audio.hasSound && audio.speechRatio > 0.22 && audio.speech.length >= 1;
+  const isDialogue = src.role !== 'music' && audio && audio.hasSound && audio.speechRatio > 0.22 && audio.speech.length >= 1;
+  if (src.kind === 'image' && video) {
+    // foto: rende uma "tomada" virtual; o movimento vem do zoom lento (efeito Ken Burns)
+    const V = clamp(E.pacing.avgShot * 2.4, 3, 9), sh = video.shots[0];
+    out.push({ id: uid('u'), srcId: src.id, kind: 'broll', start: 0, end: V, dur: V, energy: 0.3, quality: sh.quality, interest: sh.interest, shot: sh, events: [], still: true });
+    return { isDialogue: false, units: out };
+  }
   if (isDialogue) {
     const pad = E.silence.pad, minLen = E.silence.remove ? E.silence.minLen : Infinity;
     // frases = fala separada por pausas ≥ 0,25 s
-    const phrases = mergeIntervals(audio.speech.map(r => ({ start: r.start, end: r.end })), 0.25);
+    let phrases = mergeIntervals(audio.speech.map(r => ({ start: r.start, end: r.end })), 0.25);
+    // "ahn", "é...", palavra repetida: sai da fala (precisa de transcrição)
+    const tr = transcript && transcript[src.id];
+    item._fillers = 0;
+    if (E.fillers && tr && tr.words && tr.words.length) {
+      const bad = findFillers(tr.words).map(b => ({ start: b.start - 0.03, end: b.end + 0.03 }));
+      if (bad.length) {
+        const cut = [];
+        for (const p of phrases) { let parts = [p]; for (const b of bad) parts = parts.flatMap(x => b.end <= x.start || b.start >= x.end ? [x] : [{ start: x.start, end: b.start }, { start: b.end, end: x.end }]); cut.push(...parts.filter(x => x.end - x.start > 0.12)); }
+        phrases = cut; item._fillers = bad.length;
+      }
+    }
     for (let i = 0; i < phrases.length; i++) {
       const p = phrases[i], next = phrases[i + 1];
       const gapAfter = next ? next.start - p.end : src.duration - p.end;
+      const forcedCut = next && item._fillers && next.start - p.end < 0.4 && next.start - p.end > 0.02;
       const start = Math.max(0, p.start - pad), end = Math.min(src.duration, p.end + Math.min(pad, gapAfter / 2));
       const sh = shotAt(video, (start + end) / 2);
       out.push({
         id: uid('u'), srcId: src.id, kind: 'dialogue', start, end, dur: end - start,
-        energy: avgOver(audio.energy, p.start, p.end), gapAfter, cutAfter: gapAfter >= minLen,
+        energy: avgOver(audio.energy, p.start, p.end), gapAfter, cutAfter: gapAfter >= minLen || !!forcedCut,
         quality: sh ? sh.quality : 1, interest: sh ? sh.interest : 0.5, shot: sh,
         events: audio.events.filter(e => e.t >= start && e.t < end),
       });
@@ -93,12 +128,20 @@ export function buildPlan({ spec, items, music, outputIndex = 0, seed = 1, trans
   const rng = mulberry32(seed * 7919 + outputIndex * 31);
   const decisions = [];
   const warnings = [];
-  const footage = items.filter(x => x.src.kind === 'video');
-  if (!footage.length) throw new Error('Nenhum vídeo para editar.');
+  // material: vídeos, fotos e narração (áudio com fala)
+  const footage = items.filter(x => x.src.kind === 'video' || x.src.kind === 'image' || (x.src.kind === 'audio' && x.src.role !== 'music' && x.audio && x.audio.speechRatio > 0.3));
+  if (!footage.length) throw new Error('Nenhum vídeo, foto ou narração para editar.');
 
-  const mats = footage.map(it => ({ it, ...materialUnits(it, E) }));
+  const mats = footage.map(it => ({ it, ...materialUnits(it, E, transcript, spec.ops || []) }));
+  const nEx = (spec.ops || []).filter(o => o.op === 'excludeSrc').length;
+  if (nEx) decisions.push(`Tirei ${nEx} trecho(s) que você pediu.`);
+  const nFill = footage.reduce((a, it) => a + (it._fillers || 0), 0);
+  if (nFill) decisions.push(`Tirei ${nFill} "ahn", muletas e palavras repetidas da fala.`);
+  if (E.fillers && !nFill && !transcript) warnings.push('Para tirar "ahn" e repetições preciso da transcrição (aba Legendas).');
   const dialogueMats = mats.filter(m => m.isDialogue);
-  const brollMats = mats.filter(m => !m.isDialogue);
+  const brollMats = mats.filter(m => !m.isDialogue && m.units.length);
+  const voiceOnly = dialogueMats.length > 0 && dialogueMats.every(m => !m.it.video);
+  if (voiceOnly && !brollMats.length) throw new Error('Narração sem imagens: mande fotos ou vídeos para cobrir a narração.');
   const samplesOf = id => (items.find(x => x.src.id === id).video || { samples: [] }).samples;
 
   const totalRaw = footage.reduce((s, x) => s + x.src.duration, 0);
@@ -132,7 +175,13 @@ export function buildPlan({ spec, items, music, outputIndex = 0, seed = 1, trans
       if (u.srcId === nx.srcId && !u.cutAfter && nx.start - u.end < 2.5) { u.end = nx.start; u.dur = u.end - u.start; nx.joined = true; }
     }
     // gancho: a frase mais forte vai também para a abertura (só se não for já a primeira)
-    if (spec.hookSeconds || E.hook.enabled) {
+    const hookOp = (spec.ops || []).filter(o => o.op === 'hookAt').pop();
+    const hookU = hookOp && dialogueMats.flatMap(m => m.units).find(u => (hookOp.srcId === '*' || u.srcId === hookOp.srcId) && hookOp.t >= u.start - 0.3 && hookOp.t < u.end);
+    if (hookU) {
+      const a = Math.max(hookU.start, hookOp.t - 0.2), len = Math.min(hookU.end - a, Math.max(spec.hookSeconds || 3, 1.5));
+      hookUsed = { ...hookU, id: uid('u'), start: a, end: a + len, dur: len, hook: true };
+      decisions.push(`Abri com o momento que você escolheu (${fmtTc(a)}).`);
+    } else if (spec.hookSeconds || E.hook.enabled) {
       const H = Math.min(spec.hookSeconds || E.hook.seconds, T ? T / 4 : 6);
       const best = [...units].slice(1).sort((a, b) => (b.energy + b.events.length * 0.1) - (a.energy + a.events.length * 0.1))[0];
       if (best && best.energy > units[0].energy * 1.05) {
@@ -159,21 +208,47 @@ export function buildPlan({ spec, items, music, outputIndex = 0, seed = 1, trans
     });
     // cortes de cobertura (b-roll por cima da fala) para variar a imagem
     if (brollMats.length) {
-      const cands = brollMats.flatMap(m => m.units).filter(u => u.quality >= 0.45).sort((a, b) => b.interest - a.interest);
-      const every = Math.max(E.pacing.avgShot * 2.5, 3.5);
-      let used = 0, lastAt = -1e9, acc = 0;
+      const allB = brollMats.flatMap(m => m.units);
       const tl = layout(clips);
-      for (const c of tl) {
-        acc = c.start;
-        // nunca cobre o primeiro corte nem o gancho: quem fala aparece primeiro
-        if (!cands.length || c === tl[0] || c.kind === 'hook' || acc < 2.5 || acc - lastAt < every || c.out - c.in < 1.2) continue;
-        const u = cands[used % cands.length]; used++;
-        const L = Math.min(c.out - c.in - 0.3, clamp(E.pacing.avgShot * 1.3, 1.2, 3.5));
-        const w = bestWindow(u, L, samplesOf(u.srcId));
-        c.cover = { srcId: u.srcId, in: w.in, out: w.in + L, offset: (c.out - c.in - L) / 2, shot: u.shot };
-        lastAt = acc;
+      const noVideo = id => !items.find(x => x.src.id === id).video;
+      if (tl.some(c => noVideo(c.srcId))) {
+        // NARRAÇÃO: toda a fala é coberta por imagens, em ordem, no ritmo pedido
+        const pool = [...allB].sort((a, b) => srcOrder(items, a.srcId) - srcOrder(items, b.srcId) || a.start - b.start);
+        let k = 0, t = 0, cursor = new Map(), reused = false;
+        for (const c of tl) {
+          if (!noVideo(c.srcId)) continue;
+          c.covers = []; c.noVideo = true;
+          let off = 0;
+          while (off < c.dur - 0.05) {
+            let L = nextShotLen(rng, t, T || tl[tl.length - 1].start + tl[tl.length - 1].dur, spec, E, c.energy);
+            if (c.dur - (off + L) < 0.6) L = c.dur - off;
+            const u = pool[k % pool.length]; if (k >= pool.length) reused = true; k++;
+            let a = cursor.get(u.id) || u.start;
+            if (a + L > u.end - 0.05) a = u.start; // voltou ao começo da tomada
+            const outT = Math.min(u.end, a + L);
+            c.covers.push({ srcId: u.srcId, in: a, out: outT, offset: off, len: L, shot: u.shot, still: !!u.still });
+            cursor.set(u.id, outT + 0.2);
+            off += L; t += L;
+          }
+        }
+        decisions.push(`Narração coberta com ${k} imagens, trocando a cada ~${fmtN(E.pacing.avgShot)} s, na ordem em que você mandou.`);
+        if (reused) warnings.push('Faltou imagem para a narração inteira: algumas fotos/tomadas aparecem mais de uma vez. Mande mais imagens para evitar.');
+      } else {
+        const cands = allB.filter(u => u.quality >= 0.45).sort((a, b) => b.interest - a.interest);
+        const every = Math.max(E.pacing.avgShot * 2.5, 3.5);
+        let used = 0, lastAt = -1e9;
+        for (const c of tl) {
+          const acc = c.start;
+          // nunca cobre o primeiro corte nem o gancho: quem fala aparece primeiro
+          if (!cands.length || c === tl[0] || c.kind === 'hook' || acc < 2.5 || acc - lastAt < every || c.out - c.in < 1.2) continue;
+          const u = cands[used % cands.length]; used++;
+          const L = Math.min(c.out - c.in - 0.3, clamp(E.pacing.avgShot * 1.3, 1.2, 3.5));
+          const w = u.still ? { in: 0 } : bestWindow(u, L, samplesOf(u.srcId));
+          c.covers = [{ srcId: u.srcId, in: w.in, out: w.in + L, offset: (c.out - c.in - L) / 2, len: L, shot: u.shot, still: !!u.still }];
+          lastAt = acc;
+        }
+        if (used) decisions.push(`Cobri ${used} trechos de fala com imagens de apoio (o som da fala continua por baixo).`);
       }
-      if (used) decisions.push(`Cobri ${used} trechos de fala com imagens de apoio (o som da fala continua por baixo).`);
     }
   } else {
     // ===== montagem (ação, viagem, clipe): imagem guiada por ritmo e música =====
@@ -182,6 +257,7 @@ export function buildPlan({ spec, items, music, outputIndex = 0, seed = 1, trans
     const bad = units.length - good.length;
     if (bad) decisions.push(`Deixei de fora ${bad} tomada(s) com problema técnico (${[...new Set(units.filter(u => u.quality < 0.35).flatMap(u => u.shot.flags))].join(', ')}).`);
     let pool = good.length ? good : units;
+    if (E.avoidShaky) { const steady = pool.filter(u => !(u.shot && u.shot.flags.includes('tremido'))); if (steady.length && totalLen(steady) >= (T || 20) * 0.6) { if (steady.length < pool.length) decisions.push(`Deixei de fora ${pool.length - steady.length} tomada(s) tremida(s).`); pool = steady; } }
     // com material de sobra, tomadas com defeito (escura, estourada, tremida) ficam de fora
     const great = pool.filter(u => u.quality >= 0.65);
     const Tguess = T || 30;
@@ -216,7 +292,12 @@ export function buildPlan({ spec, items, music, outputIndex = 0, seed = 1, trans
     const quant = L => { if (!P) return L; let nb = Math.max(1, Math.round(L / P)); if (nb === 3) nb = rng() < 0.5 ? 2 : 4; else if (nb > 4 && nb < 8) nb = rng() < 0.6 ? 4 : 8; return nb * P; };
     // gancho primeiro (vai para o começo, fora da ordem)
     let t = 0;
-    if ((spec.hookSeconds || E.hook.enabled) && pool.length > 2) {
+    const hookOpM = (spec.ops || []).filter(o => o.op === 'hookAt').pop();
+    const chosenU = hookOpM && pool.find(u => (hookOpM.srcId === '*' || u.srcId === hookOpM.srcId) && hookOpM.t >= u.start && hookOpM.t < u.end);
+    if (chosenU) {
+      const L = Math.min(quant(Math.max(E.pacing.avgShot * 1.2, 1.0)), chosenU.end - hookOpM.t - 0.05, spec.hookSeconds || 3);
+      if (L > 0.3) { clips.push({ id: uid('c'), srcId: chosenU.srcId, in: hookOpM.t, out: hookOpM.t + L, speed: 1, kind: 'hook', energy: chosenU.energy, shot: chosenU.shot, beat: !!P, score: 2, interest: chosenU.interest }); markUsed(chosenU.srcId, hookOpM.t - 0.3, hookOpM.t + L + 0.3); t += L; decisions.push(`Abri com o momento que você escolheu (${fmtTc(hookOpM.t)}).`); }
+    } else if ((spec.hookSeconds || E.hook.enabled) && pool.length > 2) {
       const bestU = [...pool].sort((a, b) => scoreOf(b) - scoreOf(a))[0];
       const L = Math.min(quant(Math.max(E.pacing.avgShot * 1.2, 1.0)), bestU.dur - 0.1, (spec.hookSeconds || 3));
       const w = freeWindow(bestU, L, bestU.start + 0.05, bestU.end - 0.05);
@@ -285,9 +366,21 @@ export function buildPlan({ spec, items, music, outputIndex = 0, seed = 1, trans
   const sameClip = (c, op) => c.srcId === op.srcId && Math.abs(c.in - op.in) < 0.08;
   for (const op of spec.ops || []) {
     if (op.op === 'deleteClip') clips = clips.filter(c => !sameClip(c, op));
-    if (op.op === 'setSpeed') clips.forEach(c => { if (sameClip(c, op)) { const outDur = (c.out - c.in) / (c.speed === 'ramp' ? 0.7 : c.speed); c.speed = op.speed; c.out = c.in + outDur * (op.speed === 'ramp' ? 0.7 : op.speed); } });
+    if (op.op === 'setSpeed') clips.forEach(c => { if (sameClip(c, op) && c.speed !== 'freeze') { const outDur = (c.out - c.in) / (c.speed === 'ramp' ? 0.7 : c.speed); const it = items.find(x => x.src.id === c.srcId); const maxOut = it ? it.src.duration : Infinity; let sp = op.speed === 'ramp' ? 0.7 : op.speed; if (c.in + outDur * sp > maxOut) sp = Math.max(1, (maxOut - c.in) / outDur); c.speed = op.speed === 'ramp' ? 'ramp' : sp; c.out = c.in + outDur * sp; } });
     if (op.op === 'trim') clips.forEach(c => { if (sameClip(c, op)) { c.out = Math.max(c.in + 0.2, c.out + op.delta); } });
+    if (op.op === 'split' || op.op === 'freeze') {
+      const i = clips.findIndex(c => c.srcId === op.srcId && op.at > c.in + 0.05 && op.at < c.out - 0.05 && c.speed !== 'freeze');
+      if (i >= 0) {
+        const c = clips[i];
+        const a = { ...c, out: op.at }, b = { ...c, id: uid('c'), in: op.at, contiguous: true, covers: null };
+        const add = op.op === 'freeze' ? [{ ...c, id: uid('c'), in: op.at, out: op.at, speed: 'freeze', freezeDur: op.dur || 1.5, kind: 'freeze', covers: null }] : [];
+        clips.splice(i, 1, a, ...add, b);
+        if (op.op === 'freeze') decisions.push(`Congelei a imagem em ${fmtTc(op.at)} por ${fmtN(op.dur || 1.5)} s.`);
+      }
+    }
   }
+
+  for (const c of clips) if (c.covers) c.covers = c.covers.filter(cv => cv.offset < (c.out - c.in) - 0.1).map(cv => ({ ...cv, len: Math.min(cv.len, (c.out - c.in) - cv.offset) }));
 
   // ---------- final: mais lento e com respiro ----------
   const tl0 = layout(clips);
@@ -328,6 +421,13 @@ export function buildPlan({ spec, items, music, outputIndex = 0, seed = 1, trans
     c.trans = { type, dur: type === 'cut' ? 0 : d };
     if (type !== 'cut') lastTrans = c.start;
   });
+  // narração: transições entre as imagens seguem o estilo (sem exagero)
+  for (const c of tl) if (c.noVideo && c.covers) c.covers.forEach((cv, i) => {
+    if (i === 0) return;
+    let type = pickWeighted(mix, rng); if (type === 'flash' && rng() < 0.6) type = 'cut';
+    const d = type === 'cut' ? 0 : Math.min(type === 'whip' ? 0.22 : tDur, cv.len * 0.45, c.covers[i - 1].len * 0.45);
+    cv.trans = d < 0.06 ? { type: 'cut', dur: 0 } : { type, dur: d };
+  });
   // transição depois do gancho: sempre marcada (flash ou whip)
   const hookIdx = tl.findIndex(c => c.kind === 'hook');
   if (hookIdx >= 0 && tl[hookIdx + 1] && tl[hookIdx + 1].kind !== 'hook') tl[hookIdx + 1].trans = { type: mix.dissolve > (mix.flash || 0) ? 'dip' : 'flash', dur: mix.dissolve > (mix.flash || 0) ? 0.4 : 0.12 };
@@ -355,17 +455,24 @@ export function buildPlan({ spec, items, music, outputIndex = 0, seed = 1, trans
     }
   });
 
+  if (E.slowPush) tl.forEach(c => { if (c.speed !== 'freeze') c.zoom = [c.zoom[0], c.zoom[0] + 0.1 * E.slowPush]; });
+  if (E.noZoom) tl.forEach(c => { c.zoom = [1, 1]; });
+  if (E.faceZoom && E.faceZoom !== 1) tl.forEach(c => { c.zoom = c.zoom.map(z => z * E.faceZoom); });
+  for (const c of tl) if (c.speed === 'freeze') { c.zoom = [1, 1.1]; c.trans = { type: 'cut', dur: 0 }; }
+
   // ---------- reenquadramento: caminho do assunto para cada corte ----------
+  const pathOf = (shot, a, b) => smoothPath(((shot && shot.path) || []).filter(p => p.t >= a - 1 && p.t <= b + 1), 5).map(p => ({ t: +p.t.toFixed(3), x: +p.x.toFixed(3), y: +p.y.toFixed(3) }));
   for (const c of tl) {
     const sh = c.shot;
-    const pathSrc = c.cover ? (c.cover.shot ? c.cover.shot.path : []) : (sh ? sh.path : []);
-    c.focus = smoothPath((pathSrc || []).filter(p => p.t >= (c.cover ? c.cover.in : c.in) - 1 && p.t <= (c.cover ? c.cover.out : c.out) + 1), 5).map(p => ({ t: +p.t.toFixed(3), x: +p.x.toFixed(3), y: +p.y.toFixed(3) }));
-    c.face = (pathSrc || []).some(p => p.face);
-    if (c.cover && c.cover.shot) { c.cover.focus = c.focus; c.cover.lum = c.cover.shot.mean; c.cover.face = c.face; }
+    c.focus = pathOf(sh, c.in, c.out);
+    c.face = !!(sh && (sh.path || []).some(p => p.face));
     if (sh) c.lum = sh.mean;
-    // com cobertura, o foco do trecho principal é o do próprio corte
-    if (c.cover && sh) { c.focus = smoothPath((sh.path || []).filter(p => p.t >= c.in - 1 && p.t <= c.out + 1), 5).map(p => ({ t: +p.t.toFixed(3), x: +p.x.toFixed(3), y: +p.y.toFixed(3) })); c.face = (sh.path || []).some(p => p.face); }
-    delete c.shot; if (c.cover) delete c.cover.shot;
+    if (sh && sh.still) c.still = true;
+    for (const cv of c.covers || []) {
+      cv.focus = pathOf(cv.shot, cv.in, cv.out); cv.lum = cv.shot ? cv.shot.mean : null; cv.face = !!(cv.shot && (cv.shot.path || []).some(p => p.face));
+      delete cv.shot;
+    }
+    delete c.shot;
   }
 
   // ---------- tremor e flash nos impactos ----------
@@ -383,10 +490,49 @@ export function buildPlan({ spec, items, music, outputIndex = 0, seed = 1, trans
   const audioPlan = planAudio({ tl, items, music, spec, E, total, events, rng, dialogue: dialogueMats.length > 0, decisions, fx, flashAmt });
 
   // ---------- legendas (se houver transcrição) ----------
-  const captions = transcript ? mapCaptions(tl, transcript) : [];
+  let captions = transcript ? mapCaptions(tl, transcript) : [];
+  if (E.captionKeywords && captions.length) {
+    const STOP = /^(que|para|pra|com|uma|uns|umas|isso|esse|essa|este|esta|aqui|mais|muito|como|quando|porque|entao|tambem|voce|voces|ele|ela|eles|elas|nos|meu|minha|seu|sua|dele|dela|tem|ter|foi|ser|esta|estou|vai|vou|the|and|that|this|with|for|you|your|are|was|have|just|like|what|from|they|them)$/;
+    const plain = w => w.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
+    const keep = captions.filter(w => w.emph || /\d/.test(w.w) || (plain(w.w).length >= 5 && !STOP.test(plain(w.w))));
+    decisions.push(`Legenda só com ${keep.length} palavras-chave (de ${captions.length}).`);
+    captions = keep.map(w => ({ ...w, solo: true }));
+  }
+  // ---------- palavrões: bipe por cima e legenda mascarada ----------
+  if (E.bleep) {
+    if (!captions.length) warnings.push('Para bipar palavrões preciso da transcrição (aba Legendas → Transcrever).');
+    else {
+      audioPlan.mutes = [];
+      for (const w of captions) if (isProfane(w.w)) {
+        const a = Math.max(0, w.t0 - 0.03), b = Math.min(total, w.t1 + 0.03);
+        audioPlan.mutes.push({ start: a, end: b }); audioPlan.sfx.push({ t: a, kind: 'beep', gainDb: -9, dur: b - a });
+        w.w = w.w[0] + '*'.repeat(Math.max(2, w.w.length - 1));
+      }
+      decisions.push(audioPlan.mutes.length ? `Bipei ${audioPlan.mutes.length} palavrão(ões) e escondi na legenda.` : 'Procurei palavrões na fala e não achei nenhum.');
+    }
+  }
+
+  // ---------- pulso na batida e zoom nas palavras fortes ----------
+  const pulse = E.beatPulse || 0;
+  if (pulse > 0 && music && audioPlan.music) {
+    const off = audioPlan.music.in; let n = 0;
+    for (const b of music.beats) {
+      const t = b.t - off + (audioPlan.music.start || 0); if (t < 0.2 || t > total - 0.3 || b.t < off) continue;
+      if (pulse < 0.6 && !b.downbeat) continue;
+      fx.push({ kind: 'pulse', t, dur: 0.22, amt: pulse * (b.downbeat ? 1 : 0.6) }); n++;
+    }
+    if (n) decisions.push(`Pulso de zoom em ${n} batidas da música.`);
+  }
+  if (E.emphasisZoom && captions.length) {
+    let n = 0, last = -9;
+    for (const w of markEmph(captions)) if (w.emph && w.t0 - last > 1.2) { fx.push({ kind: 'punch', t: w.t0, dur: Math.min(0.9, Math.max(0.35, w.t1 - w.t0 + 0.25)), amt: 0.1 }); last = w.t0; n++; }
+    if (n) decisions.push(`Zoom rápido em ${n} palavras fortes.`);
+  }
 
   // ---------- textos ----------
   const overlays = [];
+  if (spec.headline && spec.headline.text) overlays.push({ id: uid('t'), kind: 'headline', text: spec.headline.text, start: 0, dur: spec.headline.all ? total : Math.min(total, spec.headline.seconds || 4), style: spec.headline.style || 'box' });
+  if (E.progressBar) overlays.push({ id: uid('t'), kind: 'progress', start: 0, dur: total, color: E.progressColor || '#FFB547', pos: E.progressPos || 'top' });
   for (const tx of spec.texts || []) {
     const round = tx.shape === 'circle' || tx.shape === 'badge';
     // círculo e selo: no canto de cima (fora do rosto), a não ser que peça em volta da pessoa
@@ -398,8 +544,9 @@ export function buildPlan({ spec, items, music, outputIndex = 0, seed = 1, trans
   const plan = {
     id: uid('plan'), createdAt: Date.now(), seed, fmt, duration: total,
     styleLabel: E.label, look: { id: E.color.look, intensity: E.color.intensity, grain: E.color.grain }, letterbox: !!E.effects.letterbox, lightLeak: E.effects.lightLeak || 0,
+    fit: !!E.fit, mirror: !!E.mirror, adjust: E.adjust || null,
     clips: tl, fx, audio: audioPlan, captions, captionStyle: (spec.captions && spec.captions.style) || E.captions.style, captionsOn: spec.captions ? spec.captions.enabled !== false : true,
-    captionOpts: { highlight: spec.captions ? spec.captions.highlight : true, uppercase: spec.captions ? spec.captions.uppercase : null, scale: (spec.over && spec.over.captionScale) || 1 },
+    captionOpts: { highlight: spec.captions ? spec.captions.highlight : true, uppercase: spec.captions ? spec.captions.uppercase : null, scale: (spec.over && spec.over.captionScale) || 1, color: E.captionColor || null, font: E.captionFont || null },
     captionY: spec.over && spec.over.captionY != null ? spec.over.captionY : null,
     overlays, decisions, warnings,
     stats: { clips: tl.length, avgShot: tl.length ? total / countVisualCuts(tl) : 0, raw: totalRaw },
@@ -407,8 +554,8 @@ export function buildPlan({ spec, items, music, outputIndex = 0, seed = 1, trans
   return plan;
 }
 
-function countVisualCuts(tl) { let n = 0; for (const c of tl) n += c.cover ? 3 : 1; return Math.max(1, n); }
-const spd = c => c.speed === 'ramp' ? 0.7 : c.speed;
+function countVisualCuts(tl) { let n = 0; for (const c of tl) n += c.covers && c.covers.length ? c.covers.length * 2 : 1; return Math.max(1, n); }
+const spd = c => c.speed === 'ramp' ? 0.7 : c.speed === 'freeze' ? 1 : c.speed;
 function srcOrder(items, id) { return items.findIndex(x => x.src.id === id); }
 function nameOf(items, id) { const it = items.find(x => x.src.id === id); return it ? it.src.name : '?'; }
 function fmtTc(t) { return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(Math.floor(t % 60)).padStart(2, '0')}`; }
@@ -422,7 +569,7 @@ export function layout(clips) {
   let t = 0;
   for (const c of clips) {
     const s = spd(c);
-    c.dur = (c.out - c.in) / s;
+    c.dur = c.speed === 'freeze' ? c.freezeDur : (c.out - c.in) / s;
     c.start = t; t += c.dur;
   }
   return clips;
@@ -437,7 +584,8 @@ function planAudio({ tl, items, music, spec, E, total, events, rng, dialogue, de
     const it = items.find(x => x.src.id === c.srcId);
     if (!it.audio || !it.audio.hasSound) continue;
     const isTalk = c.kind === 'dialogue' || (c.kind === 'hook' && dialogue);
-    let gainDb = isTalk ? 0 : hasMusic ? -16 : -4;
+    let gainDb = (isTalk ? 0 : hasMusic ? -16 : -4) + (spec.audio.originalDb || 0);
+    if (spec.audio.muteOriginal) gainDb = -60;
     if (c.speed !== 1) gainDb = -60; // som em câmera lenta fica estranho: some, a música assume
     if (gainDb <= -59) continue;
     const xf = c.trans && c.trans.dur ? c.trans.dur / 2 : 0;
@@ -458,17 +606,27 @@ function planAudio({ tl, items, music, spec, E, total, events, rng, dialogue, de
   const duck = mergeIntervals(speechOut, 0.35);
   let musicPlan = null;
   if (hasMusic) {
-    const win = spec.music.start != null ? { start: Math.max(0, Math.min(spec.music.start, music.duration - 1)), end: Math.min(music.duration, spec.music.start + total) } : bestMusicWindow(music, total);
+    const enter = clamp(spec.music.enterAt || 0, 0, Math.max(0, total - 2));
+    const mDur = total - enter;
+    let win = spec.music.start != null ? { start: Math.max(0, Math.min(spec.music.start, music.duration - 1)), end: Math.min(music.duration, spec.music.start + mDur) } : bestMusicWindow(music, mDur);
+    if (spec.music.peak && spec.music.start == null && music.energy && music.energy.length) {
+      // começa no refrão / drop: o compasso onde a energia dos próximos 6 s é a maior
+      const downs = music.beats.filter(b => b.downbeat).map(b => b.t); const HOP = music.duration / music.energy.length;
+      let best = win.start, bs = -1;
+      for (const t of downs.length ? downs : [0]) { if (t + Math.min(mDur, 6) > music.duration) break; const i0 = Math.floor(t / HOP), i1 = Math.floor((t + 6) / HOP); let e = 0; for (let i = i0; i < i1; i++) e += music.energy[i] || 0; e /= Math.max(1, i1 - i0); if (e > bs) { bs = e; best = t; } }
+      win = { start: best, end: Math.min(music.duration, best + mDur) };
+    }
     const intensity = spec.music.intensity || 0;
     let level = E.music.levelDb + intensity * 8;
-    if (!dialogue) level = Math.max(level, -9 + intensity * 4);
+    if (!dialogue || spec.audio.muteOriginal) level = Math.max(level, -9 + intensity * 4);
+    level += spec.audio.musicDb || 0;
     const endSec = (spec.sections || []).find(s => s.from < 0);
     musicPlan = {
-      srcId: music.srcId, in: win.start, start: 0, dur: total, levelDb: clamp(level, -30, -1),
-      duck: duck.map(d => ({ start: d.start, end: d.end })), duckDb: E.music.duckDb, fadeIn: win.start > 0.5 ? 0.6 : 0.05,
+      srcId: music.srcId, in: win.start, start: enter, dur: mDur, levelDb: clamp(level, -30, -1),
+      duck: duck.map(d => ({ start: d.start, end: d.end })), duckDb: E.music.duckDb, fadeIn: enter > 0 ? 1.2 : win.start > 0.5 ? 0.6 : 0.05,
       fadeOut: Math.min(endSec ? 3.5 : 2, total * 0.2), swellAtEnd: !!endSec, bpm: music.bpm,
     };
-    decisions.push(`Música: trecho de ${fmtTc(win.start)} a ${fmtTc(win.end)} de "${music.name}" (${fmtN(music.bpm)} BPM)${duck.length ? ', abaixando quando alguém fala' : ''}${intensity ? `, intensidade ${intensity > 0 ? '+' : ''}${Math.round(intensity * 100)}%` : ''}.`);
+    decisions.push(`Música${enter ? ` entrando em ${fmtTc(enter)},` : ':'} trecho de ${fmtTc(win.start)} a ${fmtTc(win.end)} de "${music.name}" (${fmtN(music.bpm)} BPM)${duck.length ? ', abaixando quando alguém fala' : ''}${intensity ? `, intensidade ${intensity > 0 ? '+' : ''}${Math.round(intensity * 100)}%` : ''}.`);
   }
   // efeitos sonoros
   const sfx = [];
@@ -499,10 +657,15 @@ function planAudio({ tl, items, music, spec, E, total, events, rng, dialogue, de
     let n = 0; for (const sp of spots) { if (n >= r.count) break; const before = sfx.length; add(sp.t, r.kind, -8); if (sfx.length > before) { n++; if (r.kind === 'impact' && (E.effects.shake || 0) > 0.1) fx.push({ kind: 'shake', t: sp.t, dur: 0.3, amt: 0.6 }); } }
   }
   sfx.sort((a, b) => a.t - b.t);
+  if (spec.audio.sfxDb) sfx.forEach(x => { x.gainDb += spec.audio.sfxDb; });
   while (sfx.length > maxSfx && maxSfx >= 0) { const i = Math.floor(rng() * sfx.length); sfx.splice(i, 1); }
   if (sfx.length) decisions.push(`${sfx.length} efeito(s) sonoro(s): ${[...new Set(sfx.map(s => s.kind))].join(', ')} — gerados por código, livres de direitos.`);
   return { tracks, music: musicPlan, sfx, duck, normalizeLufs: -14 };
 }
+
+// Palavrões e xingamentos comuns (PT/EN). A comparação ignora acentos e caixa.
+const PROFANE = /^(porra|porr[ao]s?|caralho|caralhos?|krl|crl|merda|merdas?|bosta|bostas?|puta|putas?|puto|putaria|foda|fodas?|foder|fodase|fodido|fodida|fdp|cacete|buceta|boceta|pau no cu|cu|cuzao|arrombad[oa]s?|desgracad[oa]s?|viad[oa]|vsf|vtnc|pqp|piroca|xoxota|otari[oa]s?|fuck|fucking|fucked|fucker|motherfucker|shit|shitty|bitch|bitches|asshole|dick|cunt|bastard|goddamn|pussy)$/;
+export function isProfane(w) { return PROFANE.test(String(w).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z]/g, '')); }
 
 // Legendas: palavras do tempo da fonte para o tempo do vídeo final.
 export function mapCaptions(tl, transcript) {

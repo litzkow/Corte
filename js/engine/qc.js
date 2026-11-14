@@ -12,7 +12,7 @@ export function checkPlan(plan, spec, mixStats) {
   const clips = plan.clips;
   // ritmo
   const durs = clips.map(c => c.dur);
-  const visualCuts = clips.reduce((n, c) => n + (c.cover ? 3 : 1), 0);
+  const visualCuts = clips.reduce((n, c) => n + (c.covers && c.covers.length ? c.covers.length * 2 : 1), 0);
   const avg = plan.duration / Math.max(1, visualCuts);
   const target = E.pacing.avgShot;
   const dev = Math.abs(avg - target) / target;

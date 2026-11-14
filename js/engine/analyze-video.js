@@ -9,11 +9,11 @@ function stats(ctx, prevGray) {
   const n = SW * SH;
   const gray = new Float32Array(n);
   const hist = new Float32Array(24);
-  let sum = 0, sum2 = 0, sat = 0, skin = 0, skx = 0, sky = 0;
+  let sum = 0, sum2 = 0, sat = 0, skin = 0, skx = 0, sky = 0, sr = 0, sg = 0, sb = 0;
   for (let i = 0, p = 0; i < n; i++, p += 4) {
     const r = d[p] / 255, g = d[p + 1] / 255, b = d[p + 2] / 255;
     const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    gray[i] = y; sum += y; sum2 += y * y;
+    gray[i] = y; sum += y; sum2 += y * y; sr += r; sg += g; sb += b;
     const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
     sat += mx > 0 ? (mx - mn) / mx : 0;
     hist[Math.min(7, r * 8 | 0)]++; hist[8 + Math.min(7, g * 8 | 0)]++; hist[16 + Math.min(7, b * 8 | 0)]++;
@@ -78,13 +78,33 @@ function stats(ctx, prevGray) {
     wx += w * x; wy += w * y; ws += w;
   }
   return {
-    gray, hist, mean, std, sat: sat / n, sharp: lap / Math.max(1, lapN), motion, shift,
+    gray, hist, mean, std, sat: sat / n, rgb: [sr / n, sg / n, sb / n], sharp: lap / Math.max(1, lapN), motion, shift,
     skin: face ? faceSize / n : 0, skinX: face ? face.x : null, skinY: face ? face.y : null, face,
     cx: (wx / ws + 0.5) / SW, cy: (wy / ws + 0.5) / SH,
   };
 }
 
 const histDist = (a, b) => { let s = 0; for (let k = 0; k < 24; k++) s += Math.abs(a[k] - b[k]); return s / 6; }; // 0..1
+
+// Foto: uma "tomada" parada. Mesmas medidas do vídeo, tiradas uma vez.
+export async function analyzeImage(src) {
+  const cv = document.createElement('canvas'); cv.width = SW; cv.height = SH;
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  // recorte "cover" do centro, como o vídeo
+  ctx.drawImage(src.img, 0, 0, SW, SH);
+  const s = stats(ctx, null);
+  const tw = 160, th = Math.round(160 * (src.height || 9) / (src.width || 16));
+  const tc = document.createElement('canvas'); tc.width = tw; tc.height = th; tc.getContext('2d').drawImage(src.img, 0, 0, tw, th);
+  const flags = [];
+  if (s.mean < 0.16) flags.push('escuro'); if (s.mean > 0.9) flags.push('estourado');
+  const sharpOk = s.sharp > 0.0004; if (!sharpOk) flags.push('desfocado');
+  const q = Math.max(0, 1 - (flags.includes('escuro') ? 0.3 : 0) - (flags.includes('estourado') ? 0.3 : 0) - (sharpOk ? 0 : 0.2));
+  const x = s.face ? s.skinX : s.cx, y = s.face ? s.skinY : s.cy;
+  const shot = { i: 0, start: 0, end: src.duration, dur: src.duration, mean: s.mean, std: s.std, sat: s.sat, sharp: s.sharp, motion: 0, shake: 0, pan: 0, skin: s.skin, flags, quality: q,
+    interest: Math.min(1, 0.35 + 0.3 * Math.min(1, s.sat * 1.6) + 0.2 * Math.min(1, s.std * 4) + (s.face ? 0.2 : 0)),
+    path: [{ t: 0, x, y, face: !!s.face }, { t: src.duration, x, y, face: !!s.face }], thumb: tc.toDataURL('image/jpeg', 0.6), dominant: [0, 0, 0], still: true };
+  return { step: src.duration, duration: src.duration, cuts: [], shots: [shot], samples: [{ t: 0, mean: s.mean, motion: 0, sat: s.sat, cx: s.cx, cy: s.cy, skin: s.skin }], still: true };
+}
 
 export async function analyzeVideo(src, { onProgress, step } = {}) {
   const seeker = await makeSeeker(src);
@@ -175,7 +195,7 @@ export async function analyzeVideo(src, { onProgress, step } = {}) {
   onProgress && onProgress(1);
   return {
     step: dt, duration: dur, cuts, shots,
-    samples: samples.map(s => ({ t: s.t, mean: s.mean, motion: s.motion, sat: s.sat, cx: s.cx, cy: s.cy, skin: s.skin, skinX: s.skinX, skinY: s.skinY })),
+    samples: samples.map(s => ({ t: s.t, mean: s.mean, std: s.std, motion: s.motion, sat: s.sat, rgb: s.rgb, cx: s.cx, cy: s.cy, skin: s.skin, skinX: s.skinX, skinY: s.skinY })),
   };
 }
 
