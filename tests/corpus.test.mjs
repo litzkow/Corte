@@ -1,5 +1,8 @@
 // node tests/corpus.test.mjs — banco de frases que o diretor TEM que entender (do simples ao complexo)
-import { interpret, resolveStyle, newSpec } from '../js/engine/director.js';
+import { interpret as legacy, resolveStyle, newSpec } from '../js/engine/director.js';
+import { interpret as brain } from '../js/engine/brain.js';
+// por padrão testa o cérebro novo (conceitos + regras clássicas); CLASSICO=1 testa só as regras clássicas
+const interpret = process.env.CLASSICO ? legacy : brain;
 
 let pass = 0, fail = 0; const fails = [];
 const base = interpret('reels estilo podcast').spec;

@@ -5,7 +5,7 @@ export const HOP_S = 0.01; // 100 quadros de análise por segundo
 // IMPORTANTE: a taxa de amostragem precisa ser múltipla de 100 (16000, 24000, 48000), senão o tempo deriva.
 const checkSr = sr => { if (sr % 100) throw new Error('taxa de amostragem precisa ser múltipla de 100: ' + sr); };
 
-function fftInPlace(re, im) {
+export function fftInPlace(re, im) {
   const n = re.length;
   for (let i = 1, j = 0; i < n; i++) {
     let bit = n >> 1;
@@ -209,7 +209,42 @@ export function analyzeMusic(x, sr) {
   const e = db.map(v => clamp((v - floor) / Math.max(loud - floor, 1), 0, 1));
   const energy = movingAvg(e, 200);
   const confidence = clamp(bestScore / (ac[0] || 1e-9) * 3, 0, 1);
-  return { bpm: Math.round(bpmFinal * 10) / 10, period: P * HOP_S, beats, onset, energy, confidence, duration: x.length / sr };
+  // seções da música: mudanças fortes de energia (a cada ~1 s), alinhadas no tempo 1 mais próximo
+  const perS = Math.round(1 / HOP_S), nS = Math.floor(energy.length / perS);
+  const eS = Array.from({ length: nS }, (_, i) => { let a = 0; for (let j = i * perS; j < (i + 1) * perS; j++) a += e[j]; return a / perS; });
+  const bounds = [0];
+  for (let i = 4; i < nS - 4; i++) {
+    const before = (eS[i - 1] + eS[i - 2] + eS[i - 3] + eS[i - 4]) / 4, after = (eS[i] + eS[i + 1] + eS[i + 2] + eS[i + 3]) / 4;
+    if (Math.abs(after - before) > 0.18 && i - bounds[bounds.length - 1] >= 6) bounds.push(i);
+  }
+  const downs = beats.filter(b => b.downbeat).map(b => b.t);
+  const snap = t => downs.length ? downs.reduce((a, b) => Math.abs(b - t) < Math.abs(a - t) ? b : a) : t;
+  const sections = bounds.map((b, i) => { const st = i ? snap(b) : 0, en = i + 1 < bounds.length ? snap(bounds[i + 1]) : x.length / sr; let m = 0, c = 0; for (let k = Math.floor(st); k < Math.min(nS, Math.ceil(en)); k++) { m += eS[k]; c++; } return { start: +st.toFixed(2), end: +en.toFixed(2), energy: c ? +(m / c).toFixed(3) : 0 }; });
+  const peakSec = sections.reduce((a, b) => (b.energy > a.energy && b.end - b.start > 4 ? b : a), sections[0] || { start: 0, energy: 0 });
+  // acentos: as 10% batidas mais fortes
+  const thr = percentile(Float32Array.from(beats.map(b => b.strength)), 0.9);
+  const accents = beats.filter(b => b.strength >= thr).map(b => +b.t.toFixed(3));
+  // traços para escolher a música certa (andamento, energia, variação e se cresce)
+  const meanE = eS.reduce((a, b) => a + b, 0) / Math.max(1, nS);
+  const dyn = Math.sqrt(eS.reduce((a, b) => a + (b - meanE) ** 2, 0) / Math.max(1, nS));
+  const third = Math.max(1, Math.floor(nS / 3));
+  const rise = eS.slice(-third).reduce((a, b) => a + b, 0) / third - eS.slice(0, third).reduce((a, b) => a + b, 0) / third;
+  return { bpm: Math.round(bpmFinal * 10) / 10, period: P * HOP_S, beats, onset, energy, confidence, duration: x.length / sr, sections, peak: peakSec ? peakSec.start : 0, accents, traits: { energy: +meanE.toFixed(3), dynamics: +dyn.toFixed(3), rise: +rise.toFixed(3) } };
+}
+
+// Clima provável de uma música a partir do andamento e da energia (não "ouve" o estilo; é estimativa honesta)
+export function musicMoodScores(m, name = '') {
+  const t = m.traits || { energy: 0.5, dynamics: 0.15, rise: 0 }, bpm = m.bpm || 100, n = String(name).toLowerCase();
+  const hint = (re) => re.test(n) ? 0.6 : 0;
+  return {
+    upbeat: (bpm >= 100 && bpm <= 140 ? 0.5 : 0.1) + t.energy * 0.5 + hint(/happy|upbeat|fun|pop|energ|animad|alegre|hip ?hop|trap/),
+    electronic: (bpm >= 118 && bpm <= 132 ? 0.5 : 0.1) + (t.dynamics < 0.15 ? 0.3 : 0) + hint(/edm|house|techno|electro|synth|eletr/),
+    epic: t.rise * 1.5 + t.dynamics * 1.5 + (t.energy > 0.5 ? 0.2 : 0) + hint(/epic|epico|trailer|orchestr|cinematic|heroic/),
+    dramatic: t.dynamics * 2 + (bpm < 100 ? 0.2 : 0) + hint(/drama|suspense|tens|dark|sombr|thriller/),
+    emotional: (bpm < 95 ? 0.5 : 0.1) + (1 - t.energy) * 0.3 + t.rise * 0.5 + hint(/sad|emotion|emoc|piano|love|triste|sentiment/),
+    atmospheric: (bpm < 90 ? 0.4 : 0.1) + (1 - t.energy) * 0.5 + (t.dynamics < 0.12 ? 0.2 : 0) + hint(/ambient|calm|lofi|lo-fi|chill|relax|calma/),
+    reflective: (bpm < 105 ? 0.35 : 0.1) + (1 - t.energy) * 0.35 + hint(/acoust|acust|folk|inspir|corporate|document/),
+  };
 }
 
 // Melhor trecho da música para uma duração: começo num tempo 1, energia crescendo até o fim.
@@ -229,4 +264,42 @@ export function bestMusicWindow(music, dur) {
     if (score > bestS) { bestS = score; best = t; }
   }
   return { start: best, end: best + dur };
+}
+
+// Redução de ruído por subtração espectral: mede o ruído nos 12% de quadros mais quietos (sem fala)
+// e reduz, em cada frequência, o que estiver no nível desse ruído. amount 0..1.
+export function denoise(x, sr, amount = 0.7) {
+  const N = 1024, H = 256, n = x.length;
+  if (n < N * 2 || amount <= 0) return x;
+  const w = new Float32Array(N); for (let i = 0; i < N; i++) w[i] = Math.sqrt(0.5 - 0.5 * Math.cos(2 * Math.PI * i / N));
+  const F = Math.floor((n - N) / H) + 1, B = N / 2 + 1;
+  const mags = new Float32Array(F * B), energy = new Float32Array(F);
+  const re = new Float32Array(N), im = new Float32Array(N);
+  for (let f = 0; f < F; f++) {
+    const o = f * H; for (let i = 0; i < N; i++) { re[i] = x[o + i] * w[i]; im[i] = 0; }
+    fftInPlace(re, im);
+    let e = 0; for (let k = 0; k < B; k++) { const m = Math.hypot(re[k], im[k]); mags[f * B + k] = m; e += m; } energy[f] = e;
+  }
+  const order = Array.from(energy.keys()).sort((a, b) => energy[a] - energy[b]);
+  const quiet = order.slice(0, Math.max(4, Math.floor(F * 0.12)));
+  const noise = new Float32Array(B); for (const f of quiet) for (let k = 0; k < B; k++) noise[k] += mags[f * B + k] / quiet.length;
+  const over = 1.2 + 1.8 * amount, floor = Math.max(0.05, 0.35 - 0.3 * amount);
+  const out = new Float32Array(n), norm = new Float32Array(n);
+  const gPrev = new Float32Array(B).fill(1);
+  for (let f = 0; f < F; f++) {
+    const o = f * H; for (let i = 0; i < N; i++) { re[i] = x[o + i] * w[i]; im[i] = 0; }
+    fftInPlace(re, im);
+    for (let k = 0; k < B; k++) {
+      const m = mags[f * B + k] + 1e-9;
+      let g = Math.max(floor, 1 - over * noise[k] / m);
+      g = 0.6 * g + 0.4 * gPrev[k]; gPrev[k] = g;   // suaviza no tempo (evita "água borbulhando")
+      re[k] *= g; im[k] *= g; if (k > 0 && k < N / 2) { re[N - k] *= g; im[N - k] *= g; }
+    }
+    // inversa: conjuga, FFT, conjuga e divide por N
+    for (let i = 0; i < N; i++) im[i] = -im[i];
+    fftInPlace(re, im);
+    for (let i = 0; i < N; i++) { const v = re[i] / N * w[i]; out[o + i] += v; norm[o + i] += w[i] * w[i]; }
+  }
+  for (let i = 0; i < n; i++) out[i] = norm[i] > 1e-3 ? out[i] / norm[i] : x[i];
+  return out;
 }

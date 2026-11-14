@@ -408,6 +408,7 @@ export const TEXT_STYLES = {
   batida:    { label: 'Palavra na batida', desc: 'As palavras aparecem uma de cada vez, no ritmo da música.', render: 'reveal', font: 'montserrat', weight: 900, upper: true, size: 0.09, lh: 1.08, fill: '#FFFFFF', stroke: '#000000', strokeW: 0.14, shadow: [0, 0.04, 0.12, 'rgba(0,0,0,.45)'], y: 0.42, enter: 'none', sample: 'take that chance cause you might grow' },
   zoom:      { label: 'Texto pequeno com zoom', desc: 'Frase pequena no meio que vai crescendo devagar.', render: 'zoom', font: 'inter', weight: 700, upper: false, size: 0.042, lh: 1.2, fill: '#FFFFFF', shadow: [0, 0.04, 0.3, 'rgba(0,0,0,.6)'], y: 0.48, enter: 'fade', sample: 'presta atenção no final' },
   carregando:{ label: 'Carregando %', desc: 'A frase com uma porcentagem que sobe de 0% a 100% até o fim.', render: 'loading', font: 'spacemono', weight: 700, upper: false, size: 0.058, lh: 1.25, fill: '#FFFFFF', shadow: [0, 0.03, 0.25, 'rgba(0,0,0,.6)'], y: 0.22, enter: 'fade', sample: 'arrumando pro jantar' },
+  terco:     { label: 'Nome na tela', desc: 'Nome e cargo na parte de baixo, com barra de cor (lower third). Separe nome e cargo com |.', render: 'lower', font: 'montserrat', weight: 800, upper: false, size: 0.05, lh: 1.25, fill: '#FFFFFF', box: 'rgba(10,10,12,.78)', accent: '#FFB547', y: 0.78, enter: 'none', sample: 'Thiago Vargas | Editor' },
   digitando: { label: 'Digitando', desc: 'A frase aparece letra por letra, com cursor piscando.', render: 'typing', font: 'spacemono', weight: 700, upper: false, size: 0.056, lh: 1.3, fill: '#FFFFFF', box: 'rgba(0,0,0,.62)', y: 0.42, enter: 'none', sample: 'ninguém acreditou quando eu disse' },
 };
 const wrapText = (ctx, text, maxW) => {
@@ -443,6 +444,16 @@ export function drawTextBlock(ctx, el, t, W, H, area) {
   ctx.save(); ctx.textBaseline = 'middle'; ctx.lineJoin = 'round'; ctx.miterLimit = 2;
 
   if (R === 'bubble') { drawBubbles(ctx, st, text, age, cx, cy, px, maxW, W, outA); ctx.restore(); return; }
+  if (R === 'lower') {
+    const [name, role] = text.split(/\s*\|\s*/); const x0 = W * 0.07, e = clamp(age / 0.35, 0, 1), out = clamp((el.dur - age) / 0.35, 0, 1);
+    ctx.font = fontStr(st, px); const w1 = ctx.measureText(name || '').width; ctx.font = fontStr(st, px * 0.68, { weight: 500 }); const w2 = role ? ctx.measureText(role).width : 0;
+    const bw = (Math.max(w1, w2) + px * 1.2) * ease.out(Math.min(e, out)), bh = px * (role ? 2.3 : 1.45);
+    ctx.save(); ctx.beginPath(); ctx.rect(x0, cy - bh / 2, bw, bh); ctx.clip();
+    ctx.fillStyle = st.box; ctx.fillRect(x0, cy - bh / 2, bw, bh); ctx.fillStyle = st.accent; ctx.fillRect(x0, cy - bh / 2, px * 0.16, bh);
+    ctx.textAlign = 'left'; ctx.fillStyle = fill; ctx.font = fontStr(st, px); ctx.fillText(name || '', x0 + px * 0.5, cy - (role ? px * 0.42 : 0));
+    if (role) { ctx.font = fontStr(st, px * 0.68, { weight: 500 }); ctx.fillStyle = 'rgba(255,255,255,.75)'; ctx.fillText(role, x0 + px * 0.5, cy + px * 0.55); }
+    ctx.restore(); ctx.restore(); return;
+  }
   if (R === 'loading') {
     const pct = Math.floor(clamp(age / Math.max(0.5, el.dur - 0.4), 0, 1) * 100);
     ctx.font = fontStr(st, px); ctx.textAlign = 'center'; ctx.globalAlpha = outA * clamp(age / 0.2, 0, 1);

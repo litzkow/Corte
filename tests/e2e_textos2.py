@@ -27,7 +27,7 @@ async def main():
         await pg.evaluate("document.querySelector('#sheetContent .gal').scrollIntoView()"); await pg.wait_for_timeout(600)
         await pg.screenshot(path="/tmp/tx4.png")
         await pg.click("#sheetX"); await pg.wait_for_timeout(300)
-        await pg.click("#btnExport")
+        await pg.click("#btnExport"); await pg.wait_for_selector("#btnStartExport"); await pg.click(".chip:text-is('720p')"); await pg.click(".chip:text-is('24')"); await pg.click("#btnStartExport")
         await pg.wait_for_selector("a[download]", timeout=600000)
         href=await pg.get_attribute("a[download]","href")
         data=await pg.evaluate("async u=>{const b=await (await fetch(u)).arrayBuffer();let s='';const a=new Uint8Array(b);for(let i=0;i<a.length;i+=32768)s+=String.fromCharCode.apply(null,a.subarray(i,i+32768));return btoa(s)}", href)

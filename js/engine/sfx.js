@@ -110,6 +110,37 @@ const GEN = {
     for (let i = 0; i < L.length; i++) { const t = i / SR; const v = Math.sin(2 * Math.PI * 1000 * t) * 0.32 * Math.min(1, t / 0.005); L[i] = v; R[i] = v; }
     return b;
   },
+  // swish: whoosh curto e agudo
+  swish(ctx, rng) {
+    const d = 0.25, b = buf(ctx, d), L = b.getChannelData(0), R = b.getChannelData(1);
+    let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+    for (let i = 0; i < L.length; i++) { const u = i / L.length; const c = biquadBP(null, 2500 + 4000 * u, 1.5); const x = noise(rng); const y = c.b0 * x + c.b2 * x2 - c.a1 * y1 - c.a2 * y2; x2 = x1; x1 = x; y2 = y1; y1 = y; const env = Math.sin(Math.PI * u) ** 2; L[i] = y * env * (1.2 - u * 0.6); R[i] = y * env * (0.6 + u * 0.6); }
+    return b;
+  },
+  // obturador de câmera: dois cliques secos com ruído curto
+  camera(ctx, rng) {
+    const d = 0.22, b = buf(ctx, d), L = b.getChannelData(0), R = b.getChannelData(1);
+    for (let i = 0; i < L.length; i++) { const t = i / SR; const e1 = Math.exp(-t * 180) * (t < 0.05 ? 1 : 0), t2 = t - 0.11, e2 = t2 > 0 ? Math.exp(-t2 * 140) : 0; const v = noise(rng) * (e1 * 0.9 + e2 * 0.7) + Math.sin(2 * Math.PI * 1800 * t) * (e1 + e2) * 0.2; L[i] = v; R[i] = v; }
+    return b;
+  },
+  // notificação: duas notas curtas subindo
+  notify(ctx) {
+    const d = 0.42, b = buf(ctx, d), L = b.getChannelData(0), R = b.getChannelData(1);
+    for (let i = 0; i < L.length; i++) { const t = i / SR; const n2 = t > 0.13; const f = n2 ? 1318.5 : 987.8; const tt = n2 ? t - 0.13 : t; const env = Math.exp(-tt * 14) * Math.min(1, tt / 0.004); const v = (Math.sin(2 * Math.PI * f * tt) + 0.3 * Math.sin(4 * Math.PI * f * tt)) * env * 0.35; L[i] = v; R[i] = v; }
+    return b;
+  },
+  // drop: queda de tom grave (sub) com impacto
+  drop(ctx, rng) {
+    const d = 1.1, b = buf(ctx, d), L = b.getChannelData(0), R = b.getChannelData(1); let ph = 0;
+    for (let i = 0; i < L.length; i++) { const t = i / SR; const f = 120 * Math.exp(-t * 3) + 35; ph += 2 * Math.PI * f / SR; const env = Math.exp(-t * 2.5) * Math.min(1, t / 0.005); const v = Math.sin(ph) * env * 0.9 + noise(rng) * Math.exp(-t * 40) * 0.3; L[i] = v; R[i] = v; }
+    return b;
+  },
+  // tensão: drone grave com batimento lento (suspense)
+  tension(ctx, rng) {
+    const d = 3, b = buf(ctx, d), L = b.getChannelData(0), R = b.getChannelData(1);
+    for (let i = 0; i < L.length; i++) { const t = i / SR, u = t / d; const env = Math.sin(Math.PI * u) ** 1.5; const v = (Math.sin(2 * Math.PI * 55 * t) + 0.6 * Math.sin(2 * Math.PI * 58.3 * t) + 0.25 * Math.sin(2 * Math.PI * 110.5 * t)) * env * 0.28 + noise(rng) * env * 0.02; L[i] = v; R[i] = v * 0.95; }
+    return b;
+  },
   glitch(ctx, rng) {
     const d = 0.35, b = buf(ctx, d), L = b.getChannelData(0), R = b.getChannelData(1);
     let hold = 0, val = 0;
@@ -121,7 +152,7 @@ const GEN = {
 export const SFX_KINDS = Object.keys(GEN);
 
 // Onde o "ponto" do som cai (o riser termina no corte, o whoosh tem o meio no corte).
-export const SFX_ANCHOR = { whoosh: 0.32, riser: 1.62, impact: 0, hit: 0, boom: 0, pop: 0, click: 0, ding: 0, glitch: 0, beep: 0 };
+export const SFX_ANCHOR = { whoosh: 0.32, riser: 1.62, impact: 0, hit: 0, boom: 0, pop: 0, click: 0, ding: 0, glitch: 0, beep: 0, swish: 0.12, camera: 0, notify: 0, drop: 0, tension: 2.4 };
 
 export function makeSfx(ctx, kind, variant = 0) {
   const key = kind + ':' + variant;

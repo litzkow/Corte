@@ -18,6 +18,7 @@ uniform float uExpA, uExpB;       // correção automática de exposição por c
 uniform float uExposure, uContrast, uSat, uTemp, uTint, uFade, uVignette, uGrain, uIntensity, uSkin, uTime;
 uniform vec3 uLift, uGamma, uGain;
 uniform float uLetterbox, uLeak, uMirror, uSharp; uniform vec2 uRes;
+uniform float uChroma, uVHS, uBloom, uLens, uBlur, uShadows, uHighlights, uGlitchFx, uBurn;
 
 float hash(vec2 p){ p = fract(p*vec2(123.34, 456.21)); p += dot(p, p+45.32); return fract(p.x*p.y); }
 
@@ -33,8 +34,9 @@ vec3 clipSample(sampler2D t, vec4 crop, float fit, vec4 fr, vec2 q){
   if (f.x < 0.0 || f.y < 0.0 || f.x > 1.0 || f.y > 1.0) return bg;
   return textureLod(t, f, 0.0).rgb;
 }
-vec3 sampA(vec2 q){ return clipSample(uA, uCropA, uFitA, uFitRectA, q) * exp2(uExpA); }
-vec3 sampB(vec2 q){ return clipSample(uB, uCropB, uFitB, uFitRectB, q) * exp2(uExpB); }
+vec2 lens(vec2 q){ if (uLens == 0.0) return q; vec2 d = q - 0.5; float r2 = dot(d, d); return 0.5 + d * (1.0 + uLens * r2 * 1.6) / (1.0 + uLens * 0.4); }
+vec3 sampA(vec2 q){ q = lens(q); if (uBlur > 0.0 && uFitA < 0.5) return rawSample(uA, uCropA, q, uBlur * 4.0) * exp2(uExpA); return clipSample(uA, uCropA, uFitA, uFitRectA, q) * exp2(uExpA); }
+vec3 sampB(vec2 q){ q = lens(q); if (uBlur > 0.0 && uFitB < 0.5) return rawSample(uB, uCropB, q, uBlur * 4.0) * exp2(uExpB); return clipSample(uB, uCropB, uFitB, uFitRectB, q) * exp2(uExpB); }
 
 vec3 blurA(vec2 q, vec2 dir){ vec3 s=vec3(0); for(int i=-6;i<=6;i++){ s+=sampA(q+dir*float(i)/6.0); } return s/13.0; }
 vec3 blurB(vec2 q, vec2 dir){ vec3 s=vec3(0); for(int i=-6;i<=6;i++){ s+=sampB(q+dir*float(i)/6.0); } return s/13.0; }
@@ -66,6 +68,32 @@ vec3 composite(vec2 q){
     vec3 b = p < 0.5 ? sampA(qq-vec2(0.012*e,0)) : sampB(qq-vec2(0.012*e,0));
     return vec3(r.r, a.g, b.b);
   }
+  if (uTrans == 7) {                                                                               // desfoque
+    float e = 1.0 - abs(p-0.5)*2.0;
+    vec3 a = rawSample(uA, uCropA, q, e*5.0) * exp2(uExpA), b = rawSample(uB, uCropB, q, e*5.0) * exp2(uExpB);
+    return mix(a, b, smoothstep(0.35, 0.65, p));
+  }
+  if (uTrans == 8) {                                                                               // giro
+    float e = p < 0.5 ? p*2.0 : (1.0-p)*2.0; float ang = (p < 0.5 ? 1.0 : -1.0) * e*e*1.6;
+    vec2 d = (q-0.5)*vec2(uRes.x/uRes.y,1.0); d = mat2(cos(ang),-sin(ang),sin(ang),cos(ang))*d; vec2 qq = d/vec2(uRes.x/uRes.y,1.0)/(1.0+e*0.4)+0.5;
+    return p < 0.5 ? radA(qq, e*0.2) : radB(qq, e*0.2);
+  }
+  if (uTrans == 9) {                                                                               // queima de filme
+    float e = 1.0 - abs(p-0.5)*2.0;
+    vec3 base = p < 0.5 ? sampA(q) : sampB(q);
+    float n = hash(floor(q*vec2(6.0,10.0)) + floor(uTime*8.0));
+    vec3 burn = vec3(1.0, 0.55, 0.18) * smoothstep(0.2, 1.0, e + n*0.5*e);
+    return base*(1.0-e*0.35) + burn*e*1.4;
+  }
+  if (uTrans == 10) {                                                                              // empurrar (slide)
+    float e = smoothstep(0.0,1.0,p);
+    return q.x + e < 1.0 ? sampA(vec2(q.x + e, q.y)) : sampB(vec2(q.x + e - 1.0, q.y));
+  }
+  if (uTrans == 11) {                                                                              // máscara redonda
+    vec2 d = (q-0.5)*vec2(uRes.x/uRes.y,1.0);
+    float r = smoothstep(0.0,1.0,p)*1.25;
+    return mix(sampA(q), sampB(q), smoothstep(r, r-0.02, length(d)));
+  }
   return p < 0.5 ? sampA(q) : sampB(q);
 }
 
@@ -75,6 +103,8 @@ vec3 grade(vec3 c){
   c *= vec3(1.0 + uTemp*0.6 + uTint*0.1, 1.0 - uTint*0.35, 1.0 - uTemp*0.6 + uTint*0.1); // balanço de branco
   c = clamp(c, 0.0, 4.0);
   c = pow(max(c*uGain + uLift*(1.0-c), 0.0), 1.0/uGamma);                                 // lift/gamma/gain
+  float lum0 = dot(c, vec3(0.2126,0.7152,0.0722));
+  c += uShadows * 0.25 * (1.0 - smoothstep(0.0, 0.5, lum0)) + uHighlights * 0.25 * smoothstep(0.5, 1.0, lum0);   // sombras e realces
   c = (c - 0.5) * uContrast + 0.5;                                                         // contraste
   c = mix(c, c*c*(3.0-2.0*c), clamp((uContrast-1.0)*0.8, 0.0, 0.6));                       // curva em S suave
   float l = dot(c, vec3(0.2126,0.7152,0.0722));
@@ -92,7 +122,17 @@ vec3 grade(vec3 c){
 
 void main(){
   vec2 q = vec2(uMirror > 0.5 ? 1.0-uv.x : uv.x, 1.0-uv.y) + uShake;
+  // falha digital de tempos em tempos (efeito glitch contínuo)
+  if (uGlitchFx > 0.0) { float burst = step(0.82, hash(vec2(floor(uTime*6.0), 3.1))); float row = floor(q.y*30.0); q.x += burst * (hash(vec2(row, floor(uTime*24.0)))-0.5) * 0.08 * uGlitchFx; }
+  // VHS: linhas tremendo
+  if (uVHS > 0.0) q.x += (hash(vec2(floor(q.y*240.0), floor(uTime*30.0)))-0.5) * 0.004 * uVHS;
   vec3 c0 = composite(q);
+  // aberração cromática (vermelho e azul separados nas bordas)
+  if (uChroma > 0.0 || uVHS > 0.0 || uGlitchFx > 0.0) {
+    float k = (uChroma + uVHS*0.6) * 0.006 * (0.4 + length(q-0.5)*1.6) + uGlitchFx*0.004*step(0.82, hash(vec2(floor(uTime*6.0), 3.1)));
+    vec3 r = composite(q + vec2(k, 0.0)), b = composite(q - vec2(k, 0.0));
+    c0 = vec3(r.r, c0.g, b.b);
+  }
   if (uSharp > 0.0 && uHasB < 0.5) { vec2 px = 1.5/uRes; vec3 nb = sampA(q+vec2(px.x,0.0))+sampA(q-vec2(px.x,0.0))+sampA(q+vec2(0.0,px.y))+sampA(q-vec2(0.0,px.y)); c0 = clamp(c0 + uSharp*(c0 - nb*0.25), 0.0, 1.0); }
   vec3 c = grade(c0);
   // vinheta
@@ -105,6 +145,10 @@ void main(){
     float lk = exp(-length((uv-lp)*vec2(1.0,1.6))*3.0);
     c += vec3(1.0,0.55,0.22) * lk * uLeak * 0.6;
   }
+  // brilho (bloom): as partes claras vazam luz em volta
+  if (uBloom > 0.0) { vec3 bl = uHasB < 0.5 ? rawSample(uA, uCropA, q, 4.0)*exp2(uExpA) : mix(rawSample(uA, uCropA, q, 4.0)*exp2(uExpA), rawSample(uB, uCropB, q, 4.0)*exp2(uExpB), uMix); c += max(bl - 0.55, 0.0) * uBloom * 1.6; }
+  // VHS: linhas, cor borrada, ruído e cantos escuros
+  if (uVHS > 0.0) { c *= 1.0 - uVHS*0.18*step(0.5, fract(uv.y*uRes.y*0.5)); c = mix(c, vec3(dot(c, vec3(0.3,0.59,0.11)))*vec3(1.05,0.98,0.9), uVHS*0.25); c += (hash(uv*uRes*0.5 + uTime*60.0)-0.5)*0.08*uVHS; }
   // grão animado
   if (uGrain > 0.0) { float g = hash(uv*uRes + floor(uTime*24.0)*13.1) - 0.5; c += g * uGrain * 0.22; }
   // flash branco
@@ -114,7 +158,7 @@ void main(){
   o = vec4(clamp(c,0.0,1.0), 1.0);
 }`;
 
-export const TRANS_ID = { cut: 0, dissolve: 1, dip: 2, flash: 3, whip: 4, zoom: 5, glitch: 6 };
+export const TRANS_ID = { cut: 0, dissolve: 1, dip: 2, flash: 3, whip: 4, zoom: 5, glitch: 6, blur: 7, spin: 8, burn: 9, slide: 10, mask: 11 };
 
 export class Compositor {
   constructor(canvas, { preserve = true } = {}) {
@@ -180,7 +224,7 @@ export class Compositor {
     gl.uniform3f(u.uLift, ...L.lift); gl.uniform3f(u.uGamma, ...L.gamma); gl.uniform3f(u.uGain, ...L.gain);
     gl.uniform1f(u.uVignette, L.vignette * Math.min(1, intensity * 1.2)); gl.uniform1f(u.uGrain, a.grain != null ? a.grain : (grainOver != null ? grainOver : L.grain));
     gl.uniform1f(u.uIntensity, intensity); gl.uniform1f(u.uSkin, skin); gl.uniform1f(u.uTime, time);
-    gl.uniform1f(u.uLetterbox, letterbox); gl.uniform1f(u.uLeak, leak); gl.uniform1f(u.uMirror, mirror ? 1 : 0); gl.uniform1f(u.uSharp, a.sharpen || 0); gl.uniform2f(u.uRes, this.canvas.width, this.canvas.height);
+    gl.uniform1f(u.uLetterbox, letterbox); gl.uniform1f(u.uLeak, leak); gl.uniform1f(u.uMirror, mirror ? 1 : 0); gl.uniform1f(u.uSharp, a.sharpen || 0); const f1 = (n, v) => { if (u[n]) gl.uniform1f(u[n], v || 0); }; f1('uChroma', a.chroma); f1('uVHS', a.vhs); f1('uBloom', a.bloom); f1('uLens', a.lens); f1('uBlur', a.blur); f1('uShadows', a.shadows); f1('uHighlights', a.highlights); f1('uGlitchFx', a.glitch); f1('uBurn', 0); gl.uniform2f(u.uRes, this.canvas.width, this.canvas.height);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 }

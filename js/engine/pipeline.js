@@ -1,6 +1,6 @@
 // Liga as etapas: validação → análise de som → análise de imagem → música → plano.
 import { decodeAudio, mixToMono } from './media.js';
-import { analyzeSpeech, analyzeMusic } from './analyze-audio.js';
+import { analyzeSpeech, analyzeMusic, denoise } from './analyze-audio.js';
 import { analyzeVideo, analyzeImage } from './analyze-video.js';
 
 // cache por fonte (não reanalisa ao mudar só o pedido)
@@ -18,14 +18,14 @@ function getWorker() {
   } catch (e) { worker = false; return null; }
   return worker;
 }
-export function analyzeInBackground(kind, x, sr) {
-  const fallback = () => (kind === 'music' ? analyzeMusic : analyzeSpeech)(x, sr);
+export function analyzeInBackground(kind, x, sr, amount) {
+  const fallback = () => kind === 'denoise' ? denoise(x, sr, amount) : (kind === 'music' ? analyzeMusic : analyzeSpeech)(x, sr);
   const w = getWorker();
   if (!w) return Promise.resolve(fallback());
   return new Promise((res, rej) => {
     const id = ++wid;
     waiting.set(id, { res, rej, fallback: () => { try { res(fallback()); } catch (err) { rej(err); } } });
-    w.postMessage({ id, kind, x, sr });   // copia o áudio (16 kHz mono: ~4 MB por 4 minutos)
+    w.postMessage({ id, kind, x, sr, amount });   // copia o áudio (16 kHz mono: ~4 MB por 4 minutos)
   });
 }
 

@@ -49,7 +49,7 @@ async def main():
         await pg.wait_for_function("window.__corte.S.versions.length>0 && !window.__corte.S.busy", timeout=300000); await pg.wait_for_timeout(800)
         print("reaberto:", await pg.evaluate("window.__corte.S.versions.length"), await pg.evaluate("window.__corte.S.sources.length"))
         await pg.screenshot(path="/tmp/m4_reopen.png")
-        await pg.click("#btnExport")
+        await pg.click("#btnExport"); await pg.wait_for_selector("#btnStartExport"); await pg.click(".chip:text-is('720p')"); await pg.click(".chip:text-is('24')"); await pg.click("#btnStartExport")
         await pg.wait_for_selector("a[download]", timeout=600000)
         print("export:", await pg.inner_text("#sheetContent"))
         href=await pg.get_attribute("a[download]","href")

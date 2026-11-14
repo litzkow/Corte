@@ -2,7 +2,11 @@
 // barra de ferramentas que muda com a seleção e a barra "Peça para a IA").
 import { loadSource, validateFile } from './engine/media.js';
 import { analyzeSource, analyzeMusicSource, forget } from './engine/pipeline.js';
-import { interpret, newSpec, resolveStyle, fmtN, fmtDur } from './engine/director.js';
+import { newSpec, resolveStyle, fmtN, fmtDur } from './engine/director.js';
+import { interpret, loadTaught, forgetTaught, loadLog } from './engine/brain.js';
+import { ACTIONS, CATEGORY_LABEL } from './engine/actions.js';
+import { vocabularyStats } from './engine/concepts.js';
+import { musicMoodScores } from './engine/analyze-audio.js';
 import { buildPlan } from './engine/planner.js';
 import { Renderer, visualSegments, VideoPool, MixCache } from './engine/render.js';
 import { Compositor } from './engine/gl.js';
@@ -18,7 +22,7 @@ import { uid, deepClone, clamp, sleep } from './engine/util.js';
 import { icon } from './icons.js';
 import * as store from './store.js';
 
-export const APP_VERSION = '2.4', APP_DATE = '14/11/2026';
+export const APP_VERSION = '2.5', APP_DATE = '14/11/2026';
 
 const $ = s => document.querySelector(s);
 const el = (tag, attrs = {}, ...kids) => { const e = document.createElement(tag); for (const [k, v] of Object.entries(attrs)) { if (k === 'class') e.className = v; else if (k === 'html') e.innerHTML = v; else if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else if (v === true) e.setAttribute(k, ''); else if (v !== false && v != null) e.setAttribute(k, v); } for (const k of kids.flat()) if (k != null) e.append(k.nodeType ? k : document.createTextNode(String(k))); return e; };
@@ -32,7 +36,11 @@ const S = {
   versions: [], cur: -1, transcript: {}, pendingStyle: null,
   renderer: null, busy: false, playing: false, sel: null, pps: 50, syncing: false, lastT: 0.5,
   comp: null, vpool: new VideoPool(), mixCache: new MixCache(), queue: [], cancel: false,
+  library: [], libA: new Map(), perf: [], errors: [], lastRequest: null,
 };
+// erros que acontecerem ficam guardados para o painel de diagnóstico
+window.addEventListener('error', e => { S.errors.push({ at: Date.now(), msg: String(e.message || e.error || e) }); if (S.errors.length > 50) S.errors.shift(); });
+window.addEventListener('unhandledrejection', e => { S.errors.push({ at: Date.now(), msg: String((e.reason && e.reason.message) || e.reason) }); if (S.errors.length > 50) S.errors.shift(); });
 const curV = () => S.versions[S.cur] || null;
 const curPlan = () => (curV() || {}).plan || null;
 const getSrc = id => S.sources.find(s => s.id === id) || (S.music && S.music.id === id ? S.music : null) || (S.ref && S.ref.id === id ? S.ref : null);
@@ -108,7 +116,7 @@ function railAnim() { if (railStop) railStop(); ensureFonts(Object.keys(FONTS));
 // =====================================================================
 // PROJETO E MÍDIA
 // =====================================================================
-function releaseMedia() { if (S.renderer) { S.renderer.dispose(); S.renderer = null; } S.vpool.clear(); S.mixCache.clear(); }
+function releaseMedia() { if (S.renderer) { S.renderer.dispose(); S.renderer = null; } S.vpool.clear(); S.mixCache.clear(); S.library = []; S.libA = new Map(); S.lastRequest = null; }
 function newProject() {
   releaseMedia();
   if (S.renderer) S.renderer.dispose();
@@ -158,7 +166,23 @@ async function addFiles(files, { role } = {}) {
   if (added && !curV()) setTimeout(() => $('#aiInput').focus(), 200);
   analyzeAll().catch(() => {});
 }
-function setMusic(src) { S.music = src; S.musicA = null; renderAll(); autosave(); }
+function setMusic(src) { if (src && !S.library.includes(src)) S.library.push(src); S.music = src; S.musicA = src ? S.libA.get(src.id) || null : null; renderAll(); autosave(); }
+// escolhe da biblioteca a música que combina: clima pedido (ou do estilo), duração e energia
+async function pickMusic(spec, onStage) {
+  if (spec.music.none || !S.library.length) return;
+  if (spec.music.srcId) { const f = S.library.find(x => x.id === spec.music.srcId); if (f && f !== S.music) setMusic(f); return; }
+  if (S.library.length < 2 || (spec.music.pick !== 'auto' && !spec.music.mood)) return;
+  for (const m of S.library) if (!S.libA.has(m.id)) S.libA.set(m.id, await analyzeMusicSource(m, onStage));
+  const mood = spec.music.mood || resolveStyle(spec).music.mood || 'upbeat';
+  const want = (spec.target && spec.target.seconds) || 30;
+  let best = null, bs = -1e9;
+  for (const m of S.library) {
+    const a = S.libA.get(m.id); const sc = musicMoodScores(a, m.name);
+    const score = (sc[mood] != null ? sc[mood] : 0.5) + (a.duration >= want ? 0.3 : -0.3 * (1 - a.duration / want)) + (a.confidence || 0) * 0.1;
+    if (score > bs) { bs = score; best = m; }
+  }
+  if (best && best !== S.music) { S.music = best; S.musicA = S.libA.get(best.id); S.pickedMusicNote = `Música escolhida da sua biblioteca: "${best.name}" (combina com clima ${mood}, ${fmtN(S.musicA.bpm)} BPM).`; }
+}
 
 let analyzing = null;
 async function analyzeAll(onStage) {
@@ -168,7 +192,7 @@ async function analyzeAll(onStage) {
       if (S.items.has(s.id)) continue;
       S.items.set(s.id, await analyzeSource(s, ev => onStage && onStage(ev)));
     }
-    if (S.music && !S.musicA) S.musicA = await analyzeMusicSource(S.music, onStage);
+    if (S.music && !S.musicA) { S.musicA = S.libA.get(S.music.id) || await analyzeMusicSource(S.music, onStage); S.libA.set(S.music.id, S.musicA); }
   })();
   try { await analyzing; } finally { analyzing = null; }
 }
@@ -207,7 +231,14 @@ async function runEditNow(text) {
     const all = store.loadStyles().filter(x => x.name !== name); all.unshift({ name, mix: prev.mix, over: prev.over, caption: prev.captions.style, at: Date.now() }); store.saveStyles(all);
     showReply({ said: [`Estilo "${name}" salvo: ritmo, cor, transições, som e legenda.`], warn: [], ask: [] }, text); $('#aiInput').value = ''; return;
   }
-  const r = text ? interpret(text, prev, { plan: curPlan(), t: S.renderer ? S.renderer.t : null }) : { spec: deepClone(prev || newSpec()), said: [], warn: [], ask: [] };
+  // repetir / refazer por voz
+  if (/^\s*(repete|repita|faz de novo|faca de novo|de novo|repeat|again|do it again)\s*[.!]?\s*$/.test(nt)) { if (S.lastRequest) return runEditNow(S.lastRequest); toast('Ainda não tem pedido para repetir.'); return; }
+  if (/^\s*(redo|refaz a ultima|volta pra frente|avanca|desfaz o desfazer)\s*[.!]?\s*$/.test(nt)) { redo(); $('#aiInput').value = ''; return; }
+  const lastV = curV(), beforeLast = S.versions[S.cur - 1] || null;
+  const ctx = { plan: curPlan(), t: S.renderer ? S.renderer.t : null, lastReply: lastV ? lastV.reply : null, prevSpecBeforeLast: beforeLast ? beforeLast.spec : null, prevMusicId: beforeLast && beforeLast.musicId ? beforeLast.musicId : null };
+  const r = text ? interpret(text, prev, ctx) : { spec: deepClone(prev || newSpec()), said: [], warn: [], ask: [], actions: [] };
+  if (r.kind === 'question' || r.kind === 'teach') { showAnswer(r, text); $('#aiInput').value = ''; return; }
+  if (text) S.lastRequest = text;
   if (r.undo) { const was = S.cur; undo(); $('#aiInput').value = ''; showReply({ said: [was > 0 ? `Voltei para a versão ${was} de ${S.versions.length}. Para ir de novo para frente, use a seta ao lado do play.` : 'Já está na primeira versão'], warn: [], ask: [] }, text); return; }
   const spec = r.spec;
   if (/\b(meu estilo|my (signature )?style|estilo assinatura|no meu jeito)\b/.test(nt)) { const st = store.loadStyles()[0]; if (st) { spec.mix = deepClone(st.mix); spec.over = { ...deepClone(st.over), ...spec.over }; if (st.caption) spec.captions.style = st.caption; r.said.unshift(`Seu estilo "${st.name}"`); } else r.warn.push('Você ainda não salvou um estilo. Depois de gostar de um resultado, diga "salva esse estilo".'); }
@@ -227,6 +258,7 @@ async function runEditNow(text) {
   if (!S.music && !spec.music.none && spec.music.mood) r.warn.push('Escolha uma música em Áudio para eu cortar no ritmo dela.');
   const seed = r.reroll ? ((curV() && curV().seed) || 1) + 1 : ((curV() && curV().seed) || 1);
   const ok = await buildAndShow(spec, { label: text ? (r.said.filter(x => !x.startsWith('Entendi a digitação'))[0] || text).slice(0, 48) : 'Edição automática', request: text || '(automático)', reply: r, seed });
+  if (S.pickedMusicNote) r.said.push(S.pickedMusicNote);
   showReply(r, text);
   if (ok) $('#aiInput').value = '';
   if (ok && r.exportNow) exportSheet();
@@ -237,7 +269,8 @@ async function buildAndShow(spec, { label, request, reply = null, seed = 1, repl
   for (const s of [...footage(), ...(S.ref ? [S.ref] : [])]) if (!S.items.has(s.id)) st.push(['a_' + s.id, `Assistindo "${s.name}"`]);
   if (S.music && !S.musicA) st.push(['m', `Achando as batidas de "${S.music.name}"`]);
   st.push(['p', 'Montando a edição'], ['x', 'Mixando o som']);
-  setBusy(true, st); S.cancel = false;
+  setBusy(true, st); S.cancel = false; const t0 = performance.now(); S.pickedMusicNote = null;
+  try { await pickMusic(spec, ev => { if (ev.stage === 'music') stage('m', 'run', ev.p); }); } catch (e) { console.warn(e); }
   const checkCancel = () => { if (S.cancel) { const e = new Error('cancelado'); e.cancelled = true; throw e; } };
   try {
     await analyzeAll(ev => { checkCancel(); if (ev.stage === 'music') stage('m', 'run', ev.p); else if (ev.src) stage('a_' + ev.src.id, 'run', ev.stage === 'audio' ? 0.05 : 0.05 + 0.95 * (ev.p || 0)); });
@@ -248,7 +281,7 @@ async function buildAndShow(spec, { label, request, reply = null, seed = 1, repl
     const made = [];
     for (const v of variants) for (let oi = 0; oi < v.spec.outputs.length; oi++) {
       const plan = buildPlan({ spec: v.spec, items: itemsNow(), music, outputIndex: oi, seed: v.seed, transcript: S.transcript });
-      made.push({ id: uid('v'), label: (variants.length > 1 ? v.label : label) + (v.spec.outputs.length > 1 ? ' · ' + PLATFORMS[v.spec.outputs[oi].platform].label : ''), spec: v.spec, outIdx: oi, seed: v.seed, plan, at: Date.now(), request, reply });
+      made.push({ musicId: S.music ? S.music.id : null, id: uid('v'), label: (variants.length > 1 ? v.label : label) + (v.spec.outputs.length > 1 ? ' · ' + PLATFORMS[v.spec.outputs[oi].platform].label : ''), spec: v.spec, outIdx: oi, seed: v.seed, plan, at: Date.now(), request, reply });
     }
     checkCancel(); stage('p', 'done');
     if (replaceIfSame && curV() && curV().label === label && Date.now() - curV().at < 15000 && made.length === 1) S.versions.splice(S.cur, 1, made[0]);
@@ -257,6 +290,7 @@ async function buildAndShow(spec, { label, request, reply = null, seed = 1, repl
     await showVersion(S.cur, false);
     stage('x', 'done');
     autosave();
+    S.perf.push({ ms: Math.round(performance.now() - t0), at: Date.now() }); if (S.perf.length > 50) S.perf.shift();
     return true;
   } catch (e) { if (e.cancelled) { toast('Cancelado. A edição anterior continua igual.'); return false; } console.error(e); toast('Deu erro: ' + (e.message || e), 6000); for (const li of document.querySelectorAll('#stages li.run')) li.className = 'err'; await sleep(1500); return false; }
   finally { setBusy(false); }
@@ -308,10 +342,19 @@ async function changeSpec(mutator, label, { replace = false } = {}) {
 // =====================================================================
 // RESPOSTA DA IA
 // =====================================================================
+function showAnswer(r, text) {
+  const box = $('#reply'); box.innerHTML = '';
+  box.append(el('button', { class: 'x', 'aria-label': 'Fechar', onclick: () => { box.hidden = true; } }, '×'));
+  if (text) box.append(el('div', { class: 'muted', style: 'margin-bottom:4px' }, `"${text.slice(0, 120)}"`));
+  for (const x of r.said || []) box.append(el('div', { class: 'r-row ok' }, x));
+  if (r.answer) box.append(el('div', { class: 'r-answer' }, r.answer));
+  box.hidden = false; clearTimeout(box._h);
+}
 function showReply(r, text) {
   const box = $('#reply'); box.innerHTML = '';
   box.append(el('button', { class: 'x', 'aria-label': 'Fechar', onclick: () => { box.hidden = true; } }, '×'));
   if (text) box.append(el('div', { class: 'muted', style: 'margin-bottom:4px' }, `"${text.slice(0, 120)}"`));
+  if (r.actions && r.actions.length > 1) box.append(el('div', { class: 'muted', style: 'margin:2px 0 4px' }, `Plano com ${r.actions.length} ações, executadas em ordem:`));
   r.said.forEach(x => box.append(el('div', { class: 'r-row ok' }, x)));
   r.warn.forEach(x => box.append(el('div', { class: 'r-row warn' }, x)));
   r.ask.forEach(x => box.append(el('div', { class: 'r-row q' }, x)));
@@ -619,8 +662,15 @@ function audioSheet() {
   const a = v.spec.audio || {}, E = resolveStyle(v.spec), m = S.music;
   const commit = (fn, lbl) => { closeSheet(); changeSpec(fn, lbl, { replace: true }); };
   openSheet('Áudio', 'Volumes, música e efeitos. Tudo sai mixado no volume das redes (-14 LUFS).',
-    label('Música'),
-    el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap' }, el('span', { class: 'muted', style: 'flex:1' }, m ? `${m.name}${S.musicA ? ` · ${fmtN(S.musicA.bpm)} BPM` : ''}` : 'Nenhuma'), el('button', { class: 'btn sm', onclick: () => { closeSheet(); $('#musicIn').click(); } }, m ? 'Trocar' : 'Escolher'), m ? el('button', { class: 'btn sm ghost', onclick: () => { closeSheet(); S.music = null; S.musicA = null; changeSpec(s => { s.music.none = true; }, 'Sem música'); } }, 'Tirar') : null),
+    label('Biblioteca de músicas'),
+    el('p', { class: 'muted' }, 'Suas músicas (de arquivos ou tiradas de vídeos). Com mais de uma, peça "música que combina" ou "música calma" e o app escolhe pelo andamento e pela energia.'),
+    S.library.length ? el('div', { class: 'list' }, ...S.library.map(t => { const an = S.libA.get(t.id); return el('div', { class: 'row' + (t === m ? ' on' : '') },
+      el('button', { class: 'row-main', onclick: () => { closeSheet(); setMusic(t); changeSpec(sp => { sp.music.none = false; sp.music.srcId = t.id; sp.music.pick = 'fixed'; }, 'Música: ' + t.name); } }, el('b', {}, (t === m ? '● ' : '') + t.name), el('span', { class: 'muted' }, an ? ` · ${fmtN(an.bpm)} BPM · ${an.sections ? an.sections.length + ' partes' : ''}` : '')),
+      el('button', { class: 'icon-btn', 'aria-label': 'Tirar ' + t.name, html: icon('trash', 16), onclick: () => { S.library = S.library.filter(x => x !== t); if (S.music === t) { S.music = null; S.musicA = null; } autosave(); audioSheet(); } })); })) : el('p', { class: 'muted' }, 'Nenhuma música ainda.'),
+    el('div', { class: 'chips', style: 'margin-top:8px' },
+      el('button', { class: 'chip', onclick: () => { closeSheet(); $('#musicIn').click(); } }, 'Adicionar música'),
+      S.library.length > 1 ? el('button', { class: 'chip', onclick: () => { closeSheet(); changeSpec(sp => { sp.music.none = false; sp.music.srcId = null; sp.music.pick = 'auto'; }, 'Música que combina'); } }, 'Escolher a que combina') : null,
+      m ? el('button', { class: 'chip', onclick: () => { closeSheet(); changeSpec(sp => { sp.music.none = true; }, 'Sem música'); } }, 'Sem música') : null),
     m ? slider('Começa em', -1, Math.max(1, Math.floor(m.duration - 3)), 1, v.spec.music.start != null ? v.spec.music.start : -1, x => x < 0 ? 'auto' : tc(x, false), null, x => commit(s => { s.music.start = x < 0 ? null : x; }, 'Trecho da música')) : null,
     m ? el('p', { class: 'muted' }, 'Música de artista conhecido pode ser silenciada ou reivindicada pelas redes quando você postar.') : null,
     label('Volumes'),
@@ -701,23 +751,58 @@ function transSheet(c) {
 }
 function trimSheet(c) { openSheet('Duração', `Agora: ${fmtN(c.dur)} s`, el('div', { class: 'chips' }, ...[-1, -0.5, -0.25, 0.25, 0.5, 1].map(d => el('button', { class: 'chip', onclick: () => { closeSheet(); changeSpec(s => s.ops.push({ op: 'trim', srcId: c.srcId, in: c.in, delta: d }), d < 0 ? 'Encurtar corte' : 'Alongar corte'); } }, (d > 0 ? '+' : '−') + fmtN(Math.abs(d)) + ' s')))); }
 // Exportar
+// Exportar: escolhas (plataforma, resolução, quadros/s, qualidade, formato) e depois a montagem, com cancelar.
+const EXPORT_PRESETS = {
+  social: { label: 'TikTok / Reels / Shorts', res: 1080, fps: 30, q: 1, ab: 192000 },
+  stories: { label: 'Stories', res: 1080, fps: 30, q: 0.9, ab: 160000 },
+  youtube: { label: 'YouTube', res: 1080, fps: 30, q: 1.3, ab: 256000 },
+  present: { label: 'Apresentação', res: 1080, fps: 30, q: 1.5, ab: 256000 },
+  leve: { label: 'Arquivo leve (WhatsApp)', res: 720, fps: 30, q: 0.6, ab: 128000 },
+};
 async function exportSheet() {
   const v = curV(); if (!v || S.exporting) return;
   stopPlay();
   const p = v.plan;
+  const short = Math.min(p.fmt.w, p.fmt.h);
+  const opt = Object.assign({ res: 1080, fps: p.fmt.fps, q: 1, ab: 192000, kind: 'mp4' }, prefs.export || {});
+  const sup4k = window.VideoEncoder ? await Renderer.preciseSupport(p.fmt.w * 2, p.fmt.h * 2, 30) : null;
+  const mp4Rec = window.MediaRecorder && RECORD_TYPES_ok('video/mp4'), webmRec = window.MediaRecorder && RECORD_TYPES_ok('video/webm');
+  const chips = (key, list) => el('div', { class: 'chips' }, ...list.map(([val, lbl, dis]) => el('button', { class: 'chip' + (opt[key] === val ? ' on' : ''), disabled: !!dis, onclick: e => { opt[key] = val; [...e.currentTarget.parentNode.children].forEach(c => c.classList.toggle('on', c === e.currentTarget)); info(); } }, lbl)));
+  const infoEl = el('p', { class: 'muted' });
+  const info = () => { const sc = opt.res / short; const W = Math.round(p.fmt.w * sc / 2) * 2, H = Math.round(p.fmt.h * sc / 2) * 2; const mb = Math.min(80e6, Math.max(3e6, W * H * (opt.fps / 30) * 5.5 * opt.q)) * p.duration / 8e6 + opt.ab * p.duration / 8e6; infoEl.textContent = `${W}×${H} · ${opt.fps} quadros/s · ${opt.kind === 'webm' ? 'WebM (VP9)' : 'MP4 (H.264 + ' + (window.AudioEncoder ? 'AAC/Opus' : 'som') + ')'} · ~${mb.toFixed(1)} MB · ${fmtDur(p.duration)}`; };
+  openSheet('Exportar vídeo', p.fmt.label,
+    label('Para onde vai'), el('div', { class: 'chips' }, ...Object.entries(EXPORT_PRESETS).map(([k, pr]) => el('button', { class: 'chip', onclick: () => { Object.assign(opt, { res: pr.res, fps: pr.fps, q: pr.q, ab: pr.ab }); exportSheetRefresh(); } }, pr.label))),
+    label('Resolução (lado menor)'), chips('res', [[720, '720p'], [1080, '1080p'], [2160, '4K', !sup4k]]),
+    label('Quadros por segundo'), chips('fps', [[24, '24'], [25, '25'], [30, '30'], [60, '60']]),
+    label('Qualidade'), chips('q', [[0.6, 'Leve'], [1, 'Alta'], [1.5, 'Máxima']]),
+    label('Som'), chips('ab', [[128000, '128 kbps'], [192000, '192 kbps'], [256000, '256 kbps']]),
+    label('Formato'), chips('kind', [['mp4', 'MP4 (H.264)'], ['webm', 'WebM', !webmRec]]),
+    infoEl,
+    el('p', { class: 'muted' }, 'HEVC (H.265) e MOV dependem do navegador e o app ainda não monta esses arquivos. MP4 H.264 serve para todas as redes.'),
+    el('button', { class: 'btn primary wide', id: 'btnStartExport', style: 'margin-top:12px', onclick: () => { prefs.export = { ...opt }; store.savePrefs(prefs); runExport(v, opt); } }, 'Exportar'));
+  info();
+  function exportSheetRefresh() { prefs.export = { ...opt }; closeSheet(); exportSheet(); }
+}
+function RECORD_TYPES_ok(prefix) { try { return ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm'].filter(t => t.startsWith(prefix)).some(t => MediaRecorder.isTypeSupported(t)); } catch (e) { return false; } }
+async function runExport(v, opt) {
+  const p = v.plan;
   const bar = el('div', { class: 'progress' }, el('i', {})), msg = el('p', { class: 'muted' }, 'Preparando…'), done = el('div', {});
-  openSheet('Exportar vídeo', `${p.fmt.label} · ${p.fmt.w}×${p.fmt.h} · ${p.fmt.fps} quadros/s · ${fmtDur(p.duration)}`, bar, msg,
-    el('p', { class: 'muted' }, 'Deixe esta tela aberta e o aparelho ligado. O vídeo é montado aqui mesmo, quadro a quadro.'), done);
+  const ac = new AbortController();
+  const cancel = el('button', { class: 'btn wide', style: 'margin-top:10px', onclick: () => { ac.abort(); msg.textContent = 'Cancelando…'; } }, 'Cancelar exportação');
+  openSheet('Exportando', `${p.fmt.label} · ${opt.res}p · ${opt.fps} quadros/s · ${fmtDur(p.duration)}`, bar, msg,
+    el('p', { class: 'muted' }, 'Deixe esta tela aberta e o aparelho ligado. O vídeo é montado aqui mesmo, quadro a quadro.'), cancel, done);
   const setP = f => { bar.firstChild.style.width = Math.round(f * 100) + '%'; };
-  const rd = new Renderer({ plan: p, getSrc, canvas: document.createElement('canvas'), scale: 1 });
+  const scale = opt.res / Math.min(p.fmt.w, p.fmt.h);
+  const rd = new Renderer({ plan: p, getSrc, canvas: document.createElement('canvas'), scale, mixCache: S.mixCache });
   S.exporting = rd;
   let wake = null; try { wake = await navigator.wakeLock.request('screen'); } catch (e) {}
   try {
     await rd.prepare((f, l) => { setP(f * 0.05); msg.textContent = l || 'Preparando'; });
     let res;
-    const sup = await Renderer.preciseSupport(rd.W, rd.H, p.fmt.fps);
-    if (sup) res = await rd.exportPrecise({ onProgress: (f, x) => { setP(0.05 + f * 0.9); msg.textContent = `Quadro ${x.frame} de ${x.frames} · falta ~${fmtDur(Math.max(1, Math.round(x.etaSec)))}`; } });
-    else { msg.textContent = 'Gravando em tempo real (este navegador não monta quadro a quadro). Não troque de tela.'; res = await rd.export({ onProgress: f => setP(0.05 + f * 0.9) }); }
+    const sup = opt.kind === 'mp4' ? await Renderer.preciseSupport(rd.W, rd.H, opt.fps) : null;
+    if (sup) res = await rd.exportPrecise({ fps: opt.fps, quality: opt.q, audioBitrate: opt.ab, signal: ac.signal, onProgress: (f, x) => { setP(0.05 + f * 0.9); msg.textContent = `Quadro ${x.frame} de ${x.frames} · falta ~${fmtDur(Math.max(1, Math.round(x.etaSec)))}`; } });
+    else { msg.textContent = 'Gravando em tempo real (este navegador não monta quadro a quadro). Não troque de tela.'; res = await rd.export({ fps: opt.fps, prefer: opt.kind === 'webm' ? 'video/webm' : 'video/mp4', quality: opt.q, audioBitrate: opt.ab, signal: ac.signal, onProgress: f => setP(0.05 + f * 0.9) }); }
+    cancel.remove();
     msg.textContent = 'Conferindo o arquivo…'; setP(0.97);
     v.exportCheck = await checkExport(res.blob, p); setP(1);
     const ext = res.type.includes('webm') ? 'webm' : 'mp4';
@@ -728,21 +813,50 @@ async function exportSheet() {
     done.append(el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-top:12px' },
       navigator.canShare && navigator.canShare({ files: [file] }) ? el('button', { class: 'btn primary', onclick: () => navigator.share({ files: [file], title: name }).catch(() => {}), html: icon('download', 18) + ' Salvar / compartilhar' }) : null,
       el('a', { class: 'btn' + (navigator.canShare ? '' : ' primary'), href: url, download: name }, 'Baixar arquivo')));
-    if (ext === 'webm') done.append(el('p', { class: 'muted' }, 'Este navegador gravou em WebM. Instagram e TikTok preferem MP4: use Safari no iPhone ou Chrome no computador.'));
-  } catch (e) { console.error(e); msg.textContent = 'Falhou: ' + (e.message || e); }
+    if (ext === 'webm') done.append(el('p', { class: 'muted' }, 'Arquivo WebM. Instagram e TikTok preferem MP4.'));
+  } catch (e) { cancel.remove(); if (e.cancelled || /cancelado/.test(e.message || '')) msg.textContent = 'Exportação cancelada. A edição continua igual.'; else { console.error(e); msg.textContent = 'Falhou: ' + (e.message || e); } }
   finally { rd.dispose(); S.exporting = null; if (wake) wake.release().catch(() => {}); }
 }
 // Ajustes
+// centro de diagnóstico: números reais do app e do aparelho
+const DIAG_TESTS = ['deixa cinematográfico', 'música e cortes na batida', 'os primeiros 10 segundos rápidos e o resto mais lento', 'legenda, efeitos sonoros e transições suaves', 'final emocionante com câmera lenta e a música sumindo devagar', 'tira o ruído de fundo e deixa minha voz mais clara', 'VHS no começo e preto e branco no final', 'mesmo estilo, mas menos agressivo', 'Make this cinematic.', 'Add music and synchronize cuts with the beat.', 'Make the first 10 seconds fast and the rest slower.', 'Add captions, sound effects, and smooth transitions.', 'Make the ending emotional with slow motion and a gradual music fade.'];
+function diagnosticsSheet() {
+  const log = loadLog(), ok = log.filter(x => x.ok).length, bad = log.filter(x => !x.ok);
+  const v = vocabularyStats();
+  const base = curV() ? curV().spec : newSpec();
+  const t0 = performance.now(); const res = DIAG_TESTS.map(t => { const r = interpret(t, base, { plan: curPlan() }); return { t, n: (r.actions || []).length }; }); const tMs = (performance.now() - t0) / DIAG_TESTS.length;
+  const cats = {}; for (const a of Object.values(ACTIONS)) cats[a.cat] = (cats[a.cat] || 0) + 1;
+  const perf = S.perf.length ? Math.round(S.perf.reduce((a, b) => a + b.ms, 0) / S.perf.length) : null;
+  const rd = S.renderer ? S.renderer.stats : null;
+  const mem = performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1e6) + ' MB' : 'o navegador não informa';
+  const row = (k, val) => el('div', { class: 'kv' }, el('span', {}, k), el('b', {}, String(val)));
+  openSheet('Centro de diagnóstico', 'Números reais deste aparelho e deste app.',
+    label('Entendimento'),
+    row('Ações de edição no registro', Object.keys(ACTIONS).length), row('Por categoria', Object.entries(cats).map(([k, n]) => `${CATEGORY_LABEL[k] || k} ${n}`).join(' · ')),
+    row('Termos e sinônimos', v.termos), row('Combinações que o analisador entende', v.combinacoes.toLocaleString('pt-BR')),
+    row('Estilos de edição (perfis)', Object.keys(PRESETS).length), row('Looks de cor', Object.keys(LOOKS).length), row('Estilos de legenda', Object.keys(CAPTION_STYLES).length), row('Estilos de texto', Object.keys(TEXT_STYLES).length),
+    row('Comandos ensinados por você', loadTaught().length),
+    label('Seus pedidos'), row('Pedidos registrados', log.length), row('Entendidos', log.length ? `${ok} (${Math.round(ok / log.length * 100)}%)` : '—'),
+    bad.length ? el('div', { class: 'list' }, ...bad.slice(-8).reverse().map(x => el('div', { class: 'row muted' }, '✗ ' + x.text))) : el('p', { class: 'muted' }, 'Nenhum pedido sem entender.'),
+    label('Teste automático agora'), row('Tempo médio para entender um pedido', tMs.toFixed(1) + ' ms'),
+    el('div', { class: 'list' }, ...res.map(x => el('div', { class: 'row' + (x.n ? '' : ' muted') }, `${x.n ? '✓' : '✗'} ${x.t} → ${x.n} ações`))),
+    label('Desempenho'), row('Tempo médio de uma edição', perf != null ? perf + ' ms' : '—'), row('Quadros desenhados / congelados', rd ? `${rd.frames} / ${rd.frozen}` : '—'), row('Memória do app', mem),
+    row('Análise de som em segundo plano', typeof Worker !== 'undefined' ? 'sim' : 'não'), row('Exportação quadro a quadro (WebCodecs)', window.VideoEncoder ? 'sim' : 'não (grava em tempo real)'),
+    label('Erros'), S.errors.length ? el('div', { class: 'list' }, ...S.errors.slice(-8).reverse().map(e => el('div', { class: 'row muted' }, new Date(e.at).toLocaleTimeString('pt-BR') + ' · ' + e.msg))) : el('p', { class: 'muted' }, 'Nenhum erro nesta sessão.'),
+    label('Limites honestos'), el('ul', { class: 'issues' }, el('li', {}, 'Não é IA generativa e não entende o conteúdo das cenas: mede fala, silêncio, batida, movimento, cortes de cena, exposição, nitidez e rosto (por cor de pele).'), el('li', {}, 'Estabilização de imagem, texto atrás da pessoa e match cut automático não existem ainda.'), el('li', {}, 'HEVC e MOV dependem do navegador; o app exporta MP4 H.264 (e WebM onde o navegador grava).')));
+}
 function settingsSheet() {
   const styles = store.loadStyles();
   openSheet('Ajustes', null,
     label('Idioma da voz'), el('div', { class: 'chips' }, ...[['pt-BR', 'Português'], ['en-US', 'Inglês']].map(([k, l]) => el('button', { class: 'chip' + (prefs.voiceLang === k ? ' on' : ''), onclick: () => { prefs.voiceLang = k; store.savePrefs(prefs); settingsSheet(); } }, l))),
     label('Meus estilos (toque para apagar)'), styles.length ? el('div', { class: 'chips' }, ...styles.map(s => el('button', { class: 'chip', onclick: () => { store.saveStyles(store.loadStyles().filter(x => x.name !== s.name)); settingsSheet(); } }, s.name + ' ×'))) : el('p', { class: 'muted' }, 'Depois de gostar de um resultado, diga "salva esse estilo".'),
+    label('Comandos que você ensinou (toque para apagar)'), loadTaught().length ? el('div', { class: 'list' }, ...loadTaught().map(t => el('button', { class: 'row', onclick: () => { forgetTaught(t.phrase); settingsSheet(); } }, el('b', {}, `"${t.phrase}"`), el('span', { class: 'muted' }, ' → ' + t.meaning + ' ×')))) : el('p', { class: 'muted' }, 'Diga, por exemplo: quando eu disser "explosivo" quer dizer cortes bem rápidos, tremor, flashes e música épica.'),
+    el('button', { class: 'btn wide', style: 'margin-top:10px', onclick: diagnosticsSheet }, 'Centro de diagnóstico'),
     label('Versão'), el('p', { class: 'muted' }, `Corte ${APP_VERSION} · publicada em ${APP_DATE}`),
     label('Como funciona'),
     el('ul', { class: 'issues' },
       el('li', {}, 'Tudo roda no seu aparelho. Seus vídeos não são enviados para lugar nenhum.'),
-      el('li', {}, 'A IA de edição entende pedidos em português e inglês por um banco de regras testado com mais de 300 frases; ela sempre mostra o que entendeu.'),
+      el('li', {}, 'Não é IA generativa: o editor entende pedidos em português e inglês por regras e conceitos combináveis (alvo, direção, intensidade e trecho), testados com mais de 390 frases. Ele sempre mostra o plano de ações que executou.'),
       el('li', {}, 'Legenda: transcrição no aparelho ou roteiro colado. Tradução automática ainda não.'),
       el('li', {}, 'Ainda não estabiliza imagem tremida; evita os trechos tremidos.'),
       el('li', {}, 'Efeitos sonoros são gerados por código, sem direitos autorais. Música de artista pode ser silenciada pelas redes.')));
@@ -772,10 +886,10 @@ function autosave() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     if (!S.project || (!S.sources.length && !S.music)) return;
-    const all = [...S.sources, ...(S.music && !S.sources.includes(S.music) ? [S.music] : []), ...(S.ref ? [S.ref] : [])];
+    const all = [...S.sources, ...S.library.filter(m => !S.sources.includes(m)), ...(S.music && !S.sources.includes(S.music) && !S.library.includes(S.music) ? [S.music] : []), ...(S.ref ? [S.ref] : [])];
     store.saveProject({
       id: S.project.id, name: S.project.name, createdAt: S.project.createdAt, thumb: (S.sources.find(s => s.thumb) || {}).thumb || null,
-      files: all.map(s => ({ id: s.id, name: s.name, role: s.role, isMusic: S.music === s, isRef: S.ref === s })),
+      files: all.map(s => ({ id: s.id, name: s.name, role: s.role, isMusic: S.music === s, isLib: S.library.includes(s), isRef: S.ref === s })),
       versions: S.versions.map(v => ({ id: v.id, label: v.label, spec: v.spec, outIdx: v.outIdx, seed: v.seed, request: v.request, at: v.at, reply: v.reply ? { said: v.reply.said, warn: v.reply.warn, ask: [] } : null })),
       cur: S.cur, transcript: S.transcript,
     });
@@ -791,7 +905,7 @@ async function openProject(id) {
     const file = await store.getFile(f.id).catch(() => null);
     if (!file) { toast(`"${f.name}" não está mais guardado.`); continue; }
     const src = await loadSource(file, { id: f.id, role: f.role }); src.role = f.role; src.thumb = await thumbOf(src);
-    if (f.isRef) S.ref = src; else { if (f.isMusic) S.music = src; if (f.role === 'footage' || f.role === 'voice') S.sources.push(src); }
+    if (f.isRef) S.ref = src; else { if (f.isMusic) S.music = src; if (f.isLib || f.isMusic) { if (!S.library.includes(src)) S.library.push(src); } if (f.role === 'footage' || f.role === 'voice') S.sources.push(src); }
   }
   S.transcript = p.transcript || {};
   S.versions = (p.versions || []).map(v => ({ ...v, plan: null }));
@@ -843,4 +957,4 @@ function bind() {
 }
 
 bind(); showHome(); store.askPersist();
-window.__corte = { S, runEdit, addFiles, exportSheet, showVersion, togglePlay, seekTo, newProject, openProject, changeSpec, aiSheet, captionsSheet, colorSheet, audioSheet, textSheet, styleSheet, mediaSheet, formatSheet, qualitySheet, versionsSheet };
+window.__corte = { S, diagnosticsSheet, runEdit, addFiles, exportSheet, showVersion, togglePlay, seekTo, newProject, openProject, changeSpec, aiSheet, captionsSheet, colorSheet, audioSheet, textSheet, styleSheet, mediaSheet, formatSheet, qualitySheet, versionsSheet };

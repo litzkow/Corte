@@ -238,6 +238,7 @@ export class Renderer {
   // zoom extra dos efeitos: pulso na batida e zoom nas palavras fortes
   fxZoom(t) {
     let z = 1;
+    for (const sec of this.plan.sectionFx || []) if (sec.push && t >= sec.from && t < sec.to) z *= 1 + sec.push * 0.12 * (t - sec.from) / Math.max(0.5, sec.to - sec.from);
     for (const fx of this.plan.fx) {
       if (t < fx.t || t > fx.t + fx.dur) continue;
       const k = (t - fx.t) / fx.dur;
@@ -271,13 +272,19 @@ export class Renderer {
       if (fx.kind === 'flash') flash = Math.max(flash, fx.amt * k * k * 0.85);
       if (fx.kind === 'pulse') flash = Math.max(flash, fx.amt * 0.12 * k * k);
     }
+    // câmera na mão: balanço lento e contínuo (somas de senos, sem tranco)
+    if (plan.handheld) { const h = 0.006 * plan.handheld; shake = [shake[0] + h * (Math.sin(t * 1.3) + 0.5 * Math.sin(t * 3.1 + 1)), shake[1] + h * (Math.cos(t * 1.1) + 0.5 * Math.sin(t * 2.7 + 2))]; }
     if (trans === 'flash' && B) flash = Math.max(flash, Math.pow(1 - Math.abs(mix - 0.5) * 2, 2) * 0.95);
     // fade de entrada/saída do vídeo
     const T = plan.duration;
-    const fadeOut = clamp((T - t) / 0.5, 0, 1), fadeIn = clamp(t / 0.25, 0, 1);
+    const fadeOut = clamp((T - t) / (plan.endFade || 0.5), 0, 1), fadeIn = clamp(t / 0.25, 0, 1);
     const lb = plan.letterbox && this.W > this.H ? 0.12 : plan.letterbox ? 0 : 0;
     if (A) {
-      this.comp.draw({ A: A.ready ? A : { ...A, el: null }, B: B && B.ready ? B : (B ? { ...B, el: null } : null), mix, trans, shake, flash, look: plan.look.id, intensity: plan.look.intensity, grainOver: plan.look.grain, letterbox: lb, leak: plan.lightLeak * (trans !== 'cut' ? 1 - Math.abs(mix - 0.5) * 2 : 0.15), time: t, skin: 1, adjust: plan.adjust, mirror: plan.mirror });
+      // trechos com cor/efeito próprios (ex.: "preto e branco só no final", "VHS no começo")
+      const sec = (plan.sectionFx || []).find(x => t >= x.from && t < x.to);
+      const look = sec && sec.look ? sec.look : plan.look.id;
+      const adjust = sec && sec.adjust ? { ...(plan.adjust || {}), ...sec.adjust } : plan.adjust;
+      this.comp.draw({ A: A.ready ? A : { ...A, el: null }, B: B && B.ready ? B : (B ? { ...B, el: null } : null), mix, trans, shake, flash, look, intensity: sec && sec.look ? 0.9 : plan.look.intensity, grainOver: plan.look.grain, letterbox: lb, leak: plan.lightLeak * (trans !== 'cut' ? 1 - Math.abs(mix - 0.5) * 2 : 0.15), time: t, skin: 1, adjust, mirror: plan.mirror });
     }
     const c = this.ctx;
     c.globalAlpha = 1;
@@ -343,11 +350,11 @@ export class Renderer {
   }
 
   // ----- exportar MP4 (tempo real) -----
-  async export({ onProgress = () => {}, fps } = {}) {
-    const type = pickRecordType();
+  async export({ onProgress = () => {}, fps, prefer = null, quality = 1, audioBitrate = 192000, signal } = {}) {
+    const type = (prefer && RECORD_TYPES.filter(t => t.startsWith(prefer)).find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t))) || pickRecordType();
     if (!type) throw new Error('Este navegador não grava vídeo (MediaRecorder). Use Safari ou Chrome atualizados.');
     const vStream = this.out.captureStream(fps || this.plan.fmt.fps);
-    const bitrate = Math.round(Math.min(40e6, Math.max(5e6, this.W * this.H * 5.5)));
+    const bitrate = Math.round(Math.min(60e6, Math.max(3e6, this.W * this.H * 5.5 * quality)));
     let rec, chunks = [];
     const done = new Promise((res, rej) => {
       this._resolveExport = res; this._rejectExport = rej;
@@ -359,7 +366,8 @@ export class Renderer {
     });
     const tracks = [...vStream.getVideoTracks(), ...audioStream.getAudioTracks()];
     const ms = new MediaStream(tracks);
-    rec = new MediaRecorder(ms, { mimeType: type, videoBitsPerSecond: bitrate, audioBitsPerSecond: 192000 });
+    rec = new MediaRecorder(ms, { mimeType: type, videoBitsPerSecond: bitrate, audioBitsPerSecond: audioBitrate });
+    if (signal) signal.addEventListener('abort', () => { this.stop(); try { rec.state !== 'inactive' && rec.stop(); } catch (e) {} const er = new Error('cancelado'); er.cancelled = true; this._rejectExport(er); }, { once: true });
     rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
     rec.onstop = () => { vStream.getTracks().forEach(t => t.stop()); this._resolveExport(new Blob(chunks, { type: type.split(';')[0] })); };
     rec.onerror = e => this._rejectExport(e.error || e);
@@ -386,19 +394,19 @@ export class Renderer {
     return { video, audio };
   }
 
-  async exportPrecise({ onProgress = () => {}, signal } = {}) {
-    const fps = this.plan.fmt.fps, W = this.W, H = this.H;
+  async exportPrecise({ onProgress = () => {}, signal, fps: fpsOver, quality = 1, audioBitrate = 192000 } = {}) {
+    const fps = fpsOver || this.plan.fmt.fps, W = this.W, H = this.H;
     const sup = await Renderer.preciseSupport(W, H, fps);
     if (!sup) throw new Error('sem suporte a WebCodecs');
     const mux = new Mp4Muxer({ width: W, height: H, fps, audio: { codec: sup.audio.name, sampleRate: 48000, channels: 2 } });
     let err = null;
-    const bitrate = Math.round(Math.min(40e6, Math.max(5e6, W * H * (fps / 30) * 5.5)));
+    const bitrate = Math.round(Math.min(80e6, Math.max(3e6, W * H * (fps / 30) * 5.5 * quality)));
     const ve = new VideoEncoder({ output: (c, m) => mux.addVideo(c, m), error: e => { err = e; } });
     ve.configure({ codec: sup.video, width: W, height: H, bitrate, framerate: fps, avc: { format: 'avc' }, latencyMode: 'quality', bitrateMode: 'variable' });
     const N = Math.max(1, Math.round(this.plan.duration * fps));
     const t0 = performance.now();
     for (let i = 0; i < N; i++) {
-      if (signal && signal.aborted) throw new Error('cancelado');
+      if (signal && signal.aborted) { try { ve.close(); } catch (e) {} const er = new Error('cancelado'); er.cancelled = true; throw er; }
       if (err) throw err;
       const t = i / fps;
       await this.frameAt(t);
@@ -415,7 +423,7 @@ export class Renderer {
     if (err) throw err;
     // som
     const ae = new AudioEncoder({ output: (c, m) => mux.addAudio(c, m), error: e => { err = e; } });
-    ae.configure({ codec: sup.audio.codec, sampleRate: 48000, numberOfChannels: 2, bitrate: 192000 });
+    ae.configure({ codec: sup.audio.codec, sampleRate: 48000, numberOfChannels: 2, bitrate: audioBitrate });
     const buf = this.mix.buffer, L = buf.getChannelData(0), R = buf.getChannelData(1);
     const frames = Math.min(buf.length, Math.round(this.plan.duration * 48000));
     const step = 4800;

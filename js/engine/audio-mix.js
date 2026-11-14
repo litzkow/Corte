@@ -2,6 +2,7 @@
 import { decodeAudio } from './media.js';
 import { makeSfx, SFX_ANCHOR } from './sfx.js';
 import { dbToGain, gainToDb, clamp } from './util.js';
+import { analyzeInBackground } from './pipeline.js';
 
 const SR = 48000;
 const hiCache = new Map();
@@ -30,18 +31,32 @@ export async function renderMix(plan, getSrc, { onProgress } = {}) {
   const ctx = new OfflineAudioContext(2, Math.ceil(total * SR) + SR / 10, SR);
   const bus = ctx.createGain(); bus.connect(ctx.destination);
   const a = plan.audio;
-  // --- som dos cortes (passa por um barramento de fala, que pode ser silenciado nos palavrões) ---
-  const speech = ctx.createGain(); speech.connect(bus);
+  const fx = a.fx || {};
+  // saída geral com balanço estéreo
+  let master = bus;
+  if (fx.pan) { const pn = ctx.createStereoPanner(); pn.pan.value = clamp(fx.pan, -1, 1); pn.connect(bus); master = pn; }
+  // --- som dos cortes: barramento de fala → limpeza da voz → saída (pode ser silenciado nos palavrões) ---
+  const speech = ctx.createGain();
+  speech.connect(voiceChain(ctx, fx, master));
   for (const m of a.mutes || []) { const s0 = Math.max(0, m.start - 0.01); speech.gain.setValueAtTime(1, s0); speech.gain.linearRampToValueAtTime(0, s0 + 0.01); speech.gain.setValueAtTime(0, m.end); speech.gain.linearRampToValueAtTime(1, m.end + 0.01); }
+  // redução de ruído: a fala é renderizada separada, limpa em segundo plano e volta para a mixagem
+  let speechDest = speech, vctx = null;
+  if (fx.denoise > 0 && a.tracks.length) { vctx = new OfflineAudioContext(2, Math.ceil(total * SR) + SR / 10, SR); speechDest = vctx.destination; }
+  const tctx = vctx || ctx;
   for (const tr of a.tracks) {
     const src = getSrc(tr.srcId); if (!src) continue;
     const buf = await sourceAudio48k(src); if (!buf) continue;
-    const n = ctx.createBufferSource(); n.buffer = buf;
-    const g = ctx.createGain();
+    const n = tctx.createBufferSource(); n.buffer = buf;
+    const g = tctx.createGain();
     const dur = (tr.out - tr.in);
     scheduleFade(g, tr.start, dur, tr.fadeIn || 0.012, tr.fadeOut || 0.012, dbToGain(tr.gainDb));
-    n.connect(g); g.connect(speech);
+    n.connect(g); g.connect(speechDest);
     n.start(tr.start, Math.max(0, tr.in), dur);
+  }
+  if (vctx) {
+    const stem = await vctx.startRendering();
+    for (let c = 0; c < stem.numberOfChannels; c++) { const clean = await analyzeInBackground('denoise', stem.getChannelData(c).slice(), SR, fx.denoise); stem.getChannelData(c).set(clean); }
+    const n = ctx.createBufferSource(); n.buffer = stem; n.connect(speech); n.start(0);
   }
   // --- música ---
   if (a.music) {
@@ -68,7 +83,7 @@ export async function renderMix(plan, getSrc, { onProgress } = {}) {
       const avail = Math.max(0.1, buf.duration - m.in);
       const play = Math.min(m.dur, avail);
       scheduleFade(fade, m.start, play, m.fadeIn, Math.min(m.fadeOut, play / 3));
-      n.connect(lvl); lvl.connect(fade); fade.connect(bus);
+      n.connect(lvl); lvl.connect(fade); fade.connect(eqChain(ctx, fx.musicEq, master));
       n.start(m.start, m.in, play);
     }
   }
@@ -77,7 +92,7 @@ export async function renderMix(plan, getSrc, { onProgress } = {}) {
     const b = makeSfx(ctx, s.kind, i % 3);
     const n = ctx.createBufferSource(); n.buffer = b;
     const g = ctx.createGain(); g.gain.value = dbToGain(s.gainDb);
-    n.connect(g); g.connect(bus);
+    n.connect(g); g.connect(master);
     const st = s.t - (SFX_ANCHOR[s.kind] || 0);
     if (st >= 0) n.start(st); else n.start(0, -st);
     if (s.dur) n.stop(Math.max(0, st) + s.dur);
@@ -88,6 +103,34 @@ export async function renderMix(plan, getSrc, { onProgress } = {}) {
   const stats = finalizeLoudness(out, a.normalizeLufs || -14, -1);
   onProgress && onProgress(1);
   return { buffer: out, stats };
+}
+
+// equalizador de 3 bandas (graves 120 Hz, médios 1 kHz, agudos 8 kHz)
+function eqChain(ctx, eq, out) {
+  if (!eq || (!eq.low && !eq.mid && !eq.high)) return out;
+  const lo = ctx.createBiquadFilter(); lo.type = 'lowshelf'; lo.frequency.value = 120; lo.gain.value = eq.low || 0;
+  const mi = ctx.createBiquadFilter(); mi.type = 'peaking'; mi.frequency.value = 1000; mi.Q.value = 0.9; mi.gain.value = eq.mid || 0;
+  const hi = ctx.createBiquadFilter(); hi.type = 'highshelf'; hi.frequency.value = 8000; hi.gain.value = eq.high || 0;
+  lo.connect(mi); mi.connect(hi); hi.connect(out); return lo;
+}
+// voz: corte de graves que embolam, presença, equalização pedida e compressão
+function voiceChain(ctx, fx, out) {
+  let head = out;
+  const cl = fx.clarity || 0, comp = Math.max(fx.comp || 0, cl * 0.8);
+  if (comp > 0) {
+    const c = ctx.createDynamicsCompressor();
+    c.threshold.value = -18 - 12 * comp; c.ratio.value = 2 + 4 * comp; c.knee.value = 8; c.attack.value = 0.006; c.release.value = 0.18;
+    const makeup = ctx.createGain(); makeup.gain.value = dbToGain(3 + 6 * comp); c.connect(makeup); makeup.connect(head); head = c;
+  }
+  head = eqChain(ctx, fx.voiceEq, head);
+  if (cl > 0) {
+    const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 70 + 40 * cl; hp.Q.value = 0.7;
+    const mud = ctx.createBiquadFilter(); mud.type = 'peaking'; mud.frequency.value = 250; mud.Q.value = 1; mud.gain.value = -3 * cl;
+    const pres = ctx.createBiquadFilter(); pres.type = 'peaking'; pres.frequency.value = 3200; pres.Q.value = 0.9; pres.gain.value = 4 * cl;
+    const air = ctx.createBiquadFilter(); air.type = 'highshelf'; air.frequency.value = 9000; air.gain.value = 2 * cl;
+    hp.connect(mud); mud.connect(pres); pres.connect(air); air.connect(head); head = hp;
+  }
+  return head;
 }
 
 // ---------- loudness (ITU-R BS.1770) ----------

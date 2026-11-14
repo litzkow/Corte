@@ -565,6 +565,16 @@ export function resolveStyle(spec) {
   // pedidos de cor/grão
   if (o.color && o.color.grain != null) out.color.grain = o.color.grain;
   if (spec.captions && spec.captions.style) out.captions.style = spec.captions.style;
+  // intensidade geral ("mesmo estilo, mas menos agressivo"): escala o que chama atenção sem trocar o estilo
+  if (o.intensity != null && o.intensity !== 1) {
+    const k = Math.max(0.2, Math.min(2, o.intensity));
+    const ef = out.effects || (out.effects = {});
+    for (const f of ['punchIn', 'shake', 'flash', 'lightLeak']) if (ef[f] != null) ef[f] = Math.min(1.5, ef[f] * k);
+    if (out.sfx) out.sfx.density = Math.min(1, (out.sfx.density || 0) * k);
+    if (out.transitions && out.transitions.mix) { const m = { ...out.transitions.mix }; for (const t of Object.keys(m)) if (t !== 'cut') m[t] *= k; out.transitions.mix = m; }
+    if (out.pacing) out.pacing.avgShot = out.pacing.avgShot / Math.pow(k, 0.5);
+    if (out.beatPulse) out.beatPulse *= k;
+  }
   return out;
 }
 

@@ -433,6 +433,12 @@ export function buildPlan({ spec, items, music, outputIndex = 0, seed = 1, trans
   if (hookIdx >= 0 && tl[hookIdx + 1] && tl[hookIdx + 1].kind !== 'hook') tl[hookIdx + 1].trans = { type: mix.dissolve > (mix.flash || 0) ? 'dip' : 'flash', dur: mix.dissolve > (mix.flash || 0) ? 0.4 : 0.12 };
   // operações pedidas: remover transição num instante
   for (const op of spec.ops || []) if (op.op === 'setTrans') { const c = tl.find(x => sameClip(x, op)); if (c && tl.indexOf(c) > 0) { c.trans = op.type === 'cut' ? { type: 'cut', dur: 0 } : { type: op.type, dur: Math.min(op.type === 'flash' ? 0.12 : 0.45, c.dur * 0.45, tl[tl.indexOf(c) - 1].dur * 0.45) }; c.lockedCut = op.type === 'cut'; } }
+  // zoom pedido num ponto ("zoom aqui"): vira um empurrão rápido no instante certo do vídeo final
+  const zoomFx = [];
+  for (const op of spec.ops || []) if (op.op === 'zoomAt') {
+    const c = tl.find(x => x.srcId === op.srcId && x.speed !== 'freeze' && op.at >= x.in - 0.01 && op.at < x.out);
+    if (c) { const t = c.start + (op.at - c.in) / spd(c); zoomFx.push({ kind: 'punch', t, dur: Math.min(1.2, c.start + c.dur - t), amt: op.amount || 0.15 }); }
+  }
   for (const op of spec.ops || []) if (op.op === 'removeTransition') {
     const c = tl.reduce((b, x) => Math.abs(x.start - op.t) < Math.abs(b.start - op.t) ? x : b, tl[0]);
     if (c && Math.abs(c.start - op.t) < 1.5) { c.trans = { type: 'cut', dur: 0 }; c.lockedCut = true; }
@@ -477,7 +483,7 @@ export function buildPlan({ spec, items, music, outputIndex = 0, seed = 1, trans
 
   // ---------- tremor e flash nos impactos ----------
   const shakeAmt = E.effects.shake || 0, flashAmt = E.effects.flash || 0;
-  const fx = [];
+  const fx = [...zoomFx];
   const events = [];
   for (const c of tl) {
     const it = items.find(x => x.src.id === c.srcId);
@@ -536,7 +542,7 @@ export function buildPlan({ spec, items, music, outputIndex = 0, seed = 1, trans
   for (const tx of spec.texts || []) {
     if (tx.shape === 'block') {
       // frase em bloco (serifa curvada, contorno branco, papel amassado)
-      const st = tx.from != null ? clamp(tx.from, 0, total - 0.5) : 0;
+      const st = tx.endCard ? Math.max(0, total - Math.min(3.5, total * 0.3)) : tx.from != null ? clamp(tx.from, 0, total - 0.5) : tx.style === 'terco' ? Math.min(1, total * 0.1) : 0;
       let beats = null;
       if (tx.style === 'batida') {
         // palavras entram nas batidas da música; sem música, no começo de cada palavra falada
@@ -554,10 +560,33 @@ export function buildPlan({ spec, items, music, outputIndex = 0, seed = 1, trans
   }
   if (spec.title) { const d = Math.min(3, Math.max(1.4, total * 0.3)); overlays.push({ id: uid('t'), kind: 'title', text: spec.title, start: Math.max(0, total - d - 0.2), dur: d, style: /trailer|action|cinematic|sports|epic|gaming/.test(E.id || '') ? 'trailer' : 'clean' }); }
 
+  // ---------- trechos com tratamento próprio (cor, efeito, movimento, velocidade, tremor) ----------
+  const sectionFx = [];
+  const secRange = sec => {
+    const from = sec.from === 'mid' ? total * 0.35 : sec.from < 0 ? Math.max(0, total + sec.from) : Math.min(total, sec.from);
+    const to = sec.to === 'mid' ? total * 0.65 : (sec.to === 0 || sec.to == null) && sec.from < 0 ? total : sec.to === 'end' ? total : Math.min(total, sec.to);
+    return [from, Math.max(from, to)];
+  };
+  for (const sec of spec.sections || []) {
+    if (!(sec.look || sec.adjust || sec.push || sec.speed || sec.shake || sec.flash)) continue;
+    const [from, to] = secRange(sec); if (to - from < 0.1) continue;
+    if (sec.look || sec.adjust || sec.push) sectionFx.push({ from, to, look: sec.look || null, adjust: sec.adjust || null, push: sec.push || 0 });
+    if (sec.speed) for (const c of tl) {
+      if (c.speed === 'freeze' || c.start < from - 0.01 || c.start + c.dur > to + 0.05) continue;
+      const it = items.find(x => x.src.id === c.srcId); const maxOut = it ? it.src.duration : Infinity;
+      const outDur = (c.out - c.in) / spd(c); let sp = sec.speed;
+      if (c.in + outDur * sp > maxOut) sp = Math.max(0.25, Math.min(sp, (maxOut - c.in) / outDur));
+      c.speed = sp; c.out = c.in + outDur * sp; c.covers = [];
+    }
+    if (sec.shake) for (let t = from; t < to; t += 0.6) fx.push({ t, dur: 0.5, kind: 'shake', amt: sec.shake });
+    if (sec.flash && music) for (const b of music.beats) { const t = b.t - (audioPlan.music ? audioPlan.music.in - (audioPlan.music.start || 0) : 0); if (t >= from && t < to && b.downbeat) fx.push({ t, dur: 0.25, kind: 'flash', amt: 0.5 * sec.flash }); }
+    decisions.push(`Trecho ${fmtTc(from)}–${fmtTc(to)}: ${[sec.look && 'cor ' + sec.look, sec.adjust && 'efeito próprio', sec.push && 'zoom lento', sec.speed && (sec.speed < 1 ? 'câmera lenta' : 'acelerado ' + sec.speed + 'x'), sec.shake && 'tremor', sec.flash && 'flashes na batida'].filter(Boolean).join(', ')}.`);
+  }
+
   const plan = {
-    id: uid('plan'), createdAt: Date.now(), seed, fmt, duration: total,
+    id: uid('plan'), createdAt: Date.now(), seed, fmt, duration: total, sectionFx,
     styleLabel: E.label, look: { id: E.color.look, intensity: E.color.intensity, grain: E.color.grain }, letterbox: !!E.effects.letterbox, lightLeak: E.effects.lightLeak || 0,
-    fit: !!E.fit, mirror: !!E.mirror, adjust: E.adjust || null,
+    fit: !!E.fit, mirror: !!E.mirror, adjust: E.adjust || null, handheld: E.handheld || 0, endFade: E.ending && E.ending.fade ? (E.ending.fadeSec || 0.5) : 0.5,
     clips: tl, fx, audio: audioPlan, captions, captionStyle: (spec.captions && spec.captions.style) || E.captions.style, captionsOn: spec.captions ? spec.captions.enabled !== false : true,
     captionOpts: { highlight: spec.captions ? spec.captions.highlight : true, uppercase: spec.captions ? spec.captions.uppercase : null, scale: (spec.over && spec.over.captionScale) || 1, color: E.captionColor || null, font: E.captionFont || null },
     captionY: spec.over && spec.over.captionY != null ? spec.over.captionY : null,
@@ -622,7 +651,11 @@ function planAudio({ tl, items, music, spec, E, total, events, rng, dialogue, de
     const enter = clamp(spec.music.enterAt || 0, 0, Math.max(0, total - 2));
     const mDur = total - enter;
     let win = spec.music.start != null ? { start: Math.max(0, Math.min(spec.music.start, music.duration - 1)), end: Math.min(music.duration, spec.music.start + mDur) } : bestMusicWindow(music, mDur);
-    if (spec.music.peak && spec.music.start == null && music.energy && music.energy.length) {
+    if (spec.music.peak && spec.music.start == null && music.peak != null && music.sections && music.sections.length > 1) {
+      // começa na seção de mais energia (refrão/drop), alinhada no tempo 1
+      const st0 = Math.min(music.peak, Math.max(0, music.duration - mDur));
+      win = { start: st0, end: Math.min(music.duration, st0 + mDur) };
+    } else if (spec.music.peak && spec.music.start == null && music.energy && music.energy.length) {
       // começa no refrão / drop: o compasso onde a energia dos próximos 6 s é a maior
       const downs = music.beats.filter(b => b.downbeat).map(b => b.t); const HOP = music.duration / music.energy.length;
       let best = win.start, bs = -1;
@@ -636,8 +669,8 @@ function planAudio({ tl, items, music, spec, E, total, events, rng, dialogue, de
     const endSec = (spec.sections || []).find(s => s.from < 0);
     musicPlan = {
       srcId: music.srcId, in: win.start, start: enter, dur: mDur, levelDb: clamp(level, -30, -1),
-      duck: duck.map(d => ({ start: d.start, end: d.end })), duckDb: E.music.duckDb, fadeIn: enter > 0 ? 1.2 : win.start > 0.5 ? 0.6 : 0.05,
-      fadeOut: Math.min(endSec ? 3.5 : 2, total * 0.2), swellAtEnd: !!endSec, bpm: music.bpm,
+      duck: duck.map(d => ({ start: d.start, end: d.end })), duckDb: E.music.duckDb, fadeIn: spec.music.fadeIn != null ? spec.music.fadeIn : enter > 0 ? 1.2 : win.start > 0.5 ? 0.6 : 0.05,
+      fadeOut: spec.music.fadeOut != null ? Math.min(spec.music.fadeOut, total * 0.4) : Math.min(endSec ? 3.5 : 2, total * 0.2), swellAtEnd: !!endSec || !!spec.music.swell, bpm: music.bpm,
     };
     decisions.push(`Música${enter ? ` entrando em ${fmtTc(enter)},` : ':'} trecho de ${fmtTc(win.start)} a ${fmtTc(win.end)} de "${music.name}" (${fmtN(music.bpm)} BPM)${duck.length ? ', abaixando quando alguém fala' : ''}${intensity ? `, intensidade ${intensity > 0 ? '+' : ''}${Math.round(intensity * 100)}%` : ''}.`);
   }
@@ -664,16 +697,28 @@ function planAudio({ tl, items, music, spec, E, total, events, rng, dialogue, de
     const h = tl.findIndex(c => c.kind === 'hook');
     if (h >= 0 && tl[h + 1]) { const at = tl[h + 1].start; if (kinds.has('riser') || kinds.has('impact')) add(at - 0.01, 'riser', -14); add(at, kinds.has('impact') ? 'impact' : 'whoosh', -9); }
   }
+  // som em todas as transições (pedido)
+  if (E.sfx.onTransitions) { let k = 0; for (const c of tl) { if (!c.start) continue; if (c.trans && c.trans.type !== 'cut') add(c.start, c.trans.type === 'flash' ? 'impact' : 'whoosh', -12); else if (k++ % 2 === 0) add(c.start, 'swish', -16); } }
   // pedidos explícitos ("3 impactos"): nos momentos mais fortes (eventos, batidas fortes, cortes de ação)
-  for (const r of spec.sfxRequests || []) {
+  for (const r of (spec.sfxRequests || []).filter(r => r.at != null)) {
+    // num momento definido (at: segundos; negativo = contando do fim; -0.5 = meio)
+    const t = r.at === -0.5 ? total / 2 : r.at < 0 ? Math.max(0.05, total + r.at) : Math.min(total - 0.05, Math.max(0.05, r.at));
+    sfx.push({ t, kind: r.kind, gainDb: r.kind === 'boom' || r.kind === 'drop' ? -6 : -9 });
+  }
+  for (const r of (spec.sfxRequests || []).filter(r => r.at == null)) {
     const spots = [...events.map(e => ({ t: e.t, s: e.strength + 1 })), ...tl.filter(c => c.beat || c.kind === 'broll').map(c => ({ t: c.start, s: (c.score || c.energy || 0.3) }))].sort((a, b) => b.s - a.s);
     let n = 0; for (const sp of spots) { if (n >= r.count) break; const before = sfx.length; add(sp.t, r.kind, -8); if (sfx.length > before) { n++; if (r.kind === 'impact' && (E.effects.shake || 0) > 0.1) fx.push({ kind: 'shake', t: sp.t, dur: 0.3, amt: 0.6 }); } }
   }
   sfx.sort((a, b) => a.t - b.t);
   if (spec.audio.sfxDb) sfx.forEach(x => { x.gainDb += spec.audio.sfxDb; });
-  while (sfx.length > maxSfx && maxSfx >= 0) { const i = Math.floor(rng() * sfx.length); sfx.splice(i, 1); }
+  const fixed = new Set(sfx.filter(x => (spec.sfxRequests || []).some(r => r.at != null && r.kind === x.kind)));
+  while (sfx.length > maxSfx + fixed.size && maxSfx >= 0) { const free = sfx.filter(x => !fixed.has(x)); if (!free.length) break; sfx.splice(sfx.indexOf(free[Math.floor(rng() * free.length)]), 1); }
   if (sfx.length) decisions.push(`${sfx.length} efeito(s) sonoro(s): ${[...new Set(sfx.map(s => s.kind))].join(', ')} — gerados por código, livres de direitos.`);
-  return { tracks, music: musicPlan, sfx, duck, normalizeLufs: -14 };
+  const au = spec.audio || {};
+  const afx = { denoise: au.denoise || 0, clarity: au.clarity || 0, comp: au.comp || 0, voiceEq: au.voiceEq || null, musicEq: au.musicEq || null, pan: au.pan || 0 };
+  const fxd = [afx.denoise && `redução de ruído ${Math.round(afx.denoise * 100)}%`, afx.clarity && 'voz mais clara (filtro, presença, compressão)', afx.comp && 'compressão', afx.voiceEq && 'equalização da voz', afx.musicEq && 'equalização da música', afx.pan && 'balanço estéreo'].filter(Boolean);
+  if (fxd.length) decisions.push('Tratamento de som: ' + fxd.join(', ') + '.');
+  return { tracks, music: musicPlan, sfx, duck, normalizeLufs: -14, fx: afx };
 }
 
 // Palavrões e xingamentos comuns (PT/EN). A comparação ignora acentos e caixa.

@@ -1,7 +1,7 @@
 // Gera js/engine/vocab.js: todas as palavras que o diretor reconhece (tiradas das próprias regras)
 // + palavras comuns de português e inglês que nunca devem ser "corrigidas".
 import fs from 'fs';
-const src = ['js/engine/director.js', 'js/engine/nlu.js'].map(f => fs.readFileSync(f, 'utf8')).join('\n');
+const src = ['js/engine/director.js', 'js/engine/nlu.js', 'js/engine/concepts.js', 'js/engine/brain.js'].map(f => fs.readFileSync(f, 'utf8')).join('\n');
 const known = new Set();
 // palavras dentro de expressões regulares e strings
 for (const m of src.matchAll(/\/((?:\\.|[^\/\n])+)\/[gimsuy]*/g)) for (const w of m[1].replace(/\\[bwsdWSD]/g, ' ').match(/[a-z]{4,}/g) || []) known.add(w);
