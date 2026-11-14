@@ -5,6 +5,7 @@ import { PRESETS, LOOKS, blendPresets } from './styles.js';
 import { PLATFORMS } from './platforms.js';
 import { deepClone, clamp } from './util.js';
 import { canon, TOPIC_STYLE, findRanges, findPoint, suggest } from './nlu.js';
+import { TEXT_STYLES } from './captions.js';
 
 export function newSpec() {
   return {
@@ -100,6 +101,7 @@ const CAPTION_STYLE_WORDS = [
   ['bubble', /\bbalao\b|\bbubble\b/], ['typewriter', /\bmaquina de escrever\b|\btypewriter\b/],
   ['impact', /\blegendas? (fortes|de impacto|grandes)\b|\b(big|bold) (captions|subtitles)\b/],
   ['papel', /\bpapel\b|\bpaper\b|\bcolagem\b|\brecortad/], ['serifa', /\bserif/], ['contorno', /\bcontorno branco\b|\bborda branca\b|\bwhite outline\b|\bedits\b/],
+  ['dinamico', /\bminimalista dinamic|\bdynamic minimal|\bnova meta\b|\bsem amarelo\b/], ['pilulas', /\bpilula|\bpills?\b/], ['duascores', /\bduas cores\b|\b(cores?|cor) alternad|\balternando (as )?cores\b/], ['calmo', /\bcalm[oa]\b|\bminuscul|\bquiet\b|\baesthetic\b/],
 ];
 const LANG = { portugues: 'pt', portuguese: 'pt', ingles: 'en', english: 'en', espanhol: 'es', spanish: 'es', frances: 'fr', french: 'fr' };
 
@@ -406,14 +408,36 @@ export function interpret(text, prev, ctx = {}) {
   const shapeMap = [['circle', /\b(circul\w*|circle|redond\w*|girando em volta|em volta d[oa] (rosto|cabeca|pessoa)|around (the |my )?(face|head))/], ['arc', /\b(arco|arc|curv|curved)/], ['wave', /\b(onda|wave|ondulad|wavy)/], ['badge', /\b(selo|badge|sticker|adesivo|carimbo|stamp)/], ['spiral', /\b(espiral|spiral)/]];
   const quotedTxt = [...String(text).matchAll(/["“”']([^"“”']{1,80})["“”']/g)].map(x => x[1]);
   // --- texto na tela em bloco: serifa curvada, contorno branco, papel amassado ---
-  const BLOCK_WORDS = [['papel', /\b(papel( amassado)?|amassad\w*|recortad\w*|recorte de papel|colagem|paper|crumpled|sticker de papel)\b/], ['serifa', /\b(serif\w*|editorial|letra de revista|letra fina e chique)\b/], ['contorno', /\b(contorno branco|borda branca|white outline|(do |estilo |tipo )(o )?edits|outline branco|sticker branco|contorno preto e branco)\b/]];
-  const bw = BLOCK_WORDS.find(([, re]) => re.test(s));
+  const BLOCK_WORDS = [
+    ['mensagem', /\b(imessage|mensage[mn]s?|conversa (de|no|do) (whats\w*|zap|iphone|celular)|baloes?( de mensagem)?|chat|whatsapp|zap|print de conversa)\b/],
+    ['revista', /\b(recortes? de (revista|jornal)|revista|jornal|ransom|letras recortadas|carta de sequestro|colagem de letras)\b/],
+    ['marcatexto', /\b(marca[ -]?textos?|highlighter|marcador amarelo|grifad\w*|grifo)\b/],
+    ['carregando', /\b(carregando|loading|porcentagem|percentual|de 0 a 100)\b/],
+    ['digitando', /\b(digitando|sendo digitad\w*|letra por letra|typing)\b/],
+    ['batida', /\b(na batida|no ritmo da musica|uma palavra (de cada vez|por vez)|(texto|frase) palavra por palavra)\b/],
+    ['zoom', /\b(texto pequeno|letra pequena|small text|(texto|frase) (com|dando|que da) zoom|zoom no texto)\b/],
+    ['pilulas', /\b(pilulas?|pills?|chips?|fundo colorido (em|nas|por|atras de) (cada )?palavras?)\b/],
+    ['caixa', /\b(caixa branca|fundo branco|texto (nativo )?do (tiktok|instagram)|com fundo|fundo atras|caixinha)\b/],
+    ['confissao', /\b(confissao|desabafo|pensamento sincero|(texto|frase|letra) amarel[oa]( grande)?|amarelo grande)\b/],
+    ['calmo', /\b(calm[oa]|quiet|minuscul\w*|aesthetic|estetic\w*|delicad[oa])\b/],
+    ['minimal', /\b(minimalista|dynamic minimal\w*|nova meta)\b/],
+    ['papel', /\b(papel( amassado)?|amassad\w*|recortad\w*|recorte de papel|colagem|paper|crumpled|sticker de papel)\b/],
+    ['serifa', /\b(serif\w*|editorial|letra de revista|letra fina e chique)\b/],
+    ['contorno', /\b(contorno branco|borda branca|white outline|(do |estilo |tipo )(o )?edits|outline branco|sticker branco|contorno preto e branco)\b/],
+  ];
+  const textWord = quotedTxt.length || /\b(texto|textos|frase|escrita|escrito|letra|letras|escreve|escrever|escreva|text|write)\b/.test(s);
+  const shapeAsked = shapeMap.some(([, re]) => re.test(s));
+  const bw = textWord && !shapeAsked ? BLOCK_WORDS.find(([, re]) => re.test(s)) : null;
   const blockAsk = /\b(texto|frase|escrita|escreve|escrever|escreva|letreiro|text|write)\b.{0,30}\b(na tela|no video|no meio|em cima do video|on screen|por cima)\b|\b(texto na tela|frase na tela|texto no meio)\b/.test(s);
   const isCaption = /\blegenda\b/.test(s) && !/\b(texto|frase)\b/.test(s);
-  if ((bw || blockAsk) && !isCaption && !/\bmanchete\b/.test(s)) {
+  if ((bw || (blockAsk && !shapeAsked)) && !isCaption && !/\bmanchete\b/.test(s)) {
     const style = bw ? bw[0] : 'contorno';
-    const label = { serifa: 'serifa curvada', contorno: 'contorno branco', papel: 'papel amassado' }[style];
+    const label = (TEXT_STYLES[style] ? TEXT_STYLES[style].label : style).toLowerCase();
     const all = !/\b(primeiros (\d+ )?segundos|so no comeco|so no inicio|no comecinho|first seconds)\b/.test(s);
+    const undoSaid = (re, fn) => { const i = said.findIndex(x => re.test(x)); if (i >= 0) { said.splice(i, 1); fn && fn(); } };
+    if (style === 'mensagem') undoSaid(/^Estilo: /, () => { spec.mix = deepClone(prev ? prev.mix : spec.mix); });
+    if (style === 'batida' && !/\b(corte|cortes|edicao|montagem)\b/.test(s)) undoSaid(/^Cortes sincronizados/, () => { if (over.pacing) { if (prev && prev.over && prev.over.pacing && prev.over.pacing.beatSync != null) over.pacing.beatSync = prev.over.pacing.beatSync; else delete over.pacing.beatSync; } });
+    if (style === 'caixa' && /\bdo (tiktok|instagram)\b/.test(s)) undoSaid(/^Formato: /, () => { spec.outputs = deepClone(prev ? prev.outputs : spec.outputs); });
     if (quotedTxt.length) { spec.texts.push({ shape: 'block', style, text: quotedTxt[0], all }); said.push(`Texto na tela em ${label}: "${quotedTxt[0]}"${all ? '' : ' (primeiros segundos)'}`); }
     else {
       const blk = spec.texts.filter(t => t.shape === 'block');
@@ -424,8 +448,8 @@ export function interpret(text, prev, ctx = {}) {
   }
   if (/\bmanchete\b/.test(s) && bw) { if (spec.headline) { spec.headline.style = bw[0]; } spec._headlineStyle = bw[0]; }
   if (/\b(tira|tire|remove|remova|sem|apaga|apague|exclui|delete|no)\b.{0,20}\b(texto|textos|selo|adesivo|sticker|badge|escrita|carimbo|letreiro)\b/.test(s) && !quotedTxt.length) {
-    if (spec.texts.length) { spec.texts = []; said.push('Sem texto com forma'); } else if (/\btitulo\b/.test(s) && spec.title) { spec.title = null; said.push('Sem título'); } else said.push('Sem textos extras');
-  } else if (!((bw || blockAsk) && !isCaption && !/\bmanchete\b/.test(s))) for (const [shape, re] of shapeMap) {
+    if (spec.texts.length) { spec.texts = []; said.push('Textos tirados da tela'); } else if (/\btitulo\b/.test(s) && spec.title) { spec.title = null; said.push('Sem título'); } else said.push('Sem textos extras');
+  } else if (!((bw || (blockAsk && !shapeAsked)) && !isCaption && !/\bmanchete\b/.test(s))) for (const [shape, re] of shapeMap) {
     if (re.test(s) && (/\b(texto|text|escrita|escrito|frase|palavra|letreiro|titulo|title|legenda)/.test(s) || (quotedTxt.length && /\b(coloca|poe|bota|adiciona|insere|add|put|um|uma)\b/.test(s)))) {
       const txt = quoted[0] || (spec.title || '');
       const follow = /\b(em volta d[oa] (rosto|cabeca|pessoa)|around (the |my |his |her )?(face|head|person)|seguindo a pessoa|follow)/.test(s);
@@ -675,7 +699,8 @@ function extraRules({ s, text, spec, prev, ctx, said, warn, ask, set, changed, s
     if (/\b(maior|maiores|grande|grandes|gigante|bigger|larger|big|huge|enorme)\b/.test(s)) { set('captionScale', clamp((over.captionScale || 1) * 1.25, 0.5, 2)); said.push('Legenda maior'); }
     if (/\b(menor|menores|pequena|pequenas|smaller|discreta)\b/.test(s)) { set('captionScale', clamp((over.captionScale || 1) * 0.8, 0.5, 2)); said.push('Legenda menor'); }
     const cm = s.match(/\b(amarel\w*|yellow|verde|green|vermelh\w*|red|azul|blue|rosa|pink|branc\w*|white|laranja|orange|roxo|purple)\b/);
-    if (cm) { const col = { amarel: '#FFE81F', yellow: '#FFE81F', verde: '#3DFF6E', green: '#3DFF6E', vermelh: '#FF3B3B', red: '#FF3B3B', azul: '#4DD9FF', blue: '#4DD9FF', rosa: '#FF2BD6', pink: '#FF2BD6', branc: '#FFFFFF', white: '#FFFFFF', laranja: '#FF8A1F', orange: '#FF8A1F', roxo: '#9B5CFF', purple: '#9B5CFF' }[Object.keys({ amarel: 1, yellow: 1, verde: 1, green: 1, vermelh: 1, red: 1, azul: 1, blue: 1, rosa: 1, pink: 1, branc: 1, white: 1, laranja: 1, orange: 1, roxo: 1, purple: 1 }).find(k => cm[1].startsWith(k))]; set('captionColor', col); said.push('Destaque da legenda em ' + cm[1]); }
+    if (cm && new RegExp(`\\b(sem|tira|tire|nada de|no)\\s+(o |a |cor )?${cm[1]}`).test(s)) cm.length = 0;
+    if (cm && cm[1]) { const col = { amarel: '#FFE81F', yellow: '#FFE81F', verde: '#3DFF6E', green: '#3DFF6E', vermelh: '#FF3B3B', red: '#FF3B3B', azul: '#4DD9FF', blue: '#4DD9FF', rosa: '#FF2BD6', pink: '#FF2BD6', branc: '#FFFFFF', white: '#FFFFFF', laranja: '#FF8A1F', orange: '#FF8A1F', roxo: '#9B5CFF', purple: '#9B5CFF' }[Object.keys({ amarel: 1, yellow: 1, verde: 1, green: 1, vermelh: 1, red: 1, azul: 1, blue: 1, rosa: 1, pink: 1, branc: 1, white: 1, laranja: 1, orange: 1, roxo: 1, purple: 1 }).find(k => cm[1].startsWith(k))]; set('captionColor', col); said.push('Destaque da legenda em ' + cm[1]); }
     const fm = s.match(/\b(montserrat|anton|bebas|bangers|luckiest|archivo|oswald|poppins|playfair|caveat|marker|rubik|space mono|lilita|inter|lora)\b/);
     if (!fm && /\b(letra|fonte|font)\b/.test(s) || /\b(mais )?(grossa|grosso|negrito|bold|pesada|forte|gordinha)\b.{0,12}\b(legenda|letra|fonte)\b|\b(legenda|letra|fonte)\b.{0,25}\b(grossa|grosso|negrito|bold|pesada|gordinha)\b/.test(s)) {
       const fw = /\b(grossa|grosso|negrito|bold|pesada|gordinha|impacto|forte)\b/.test(s) ? 'anton' : /\b(fina|fininha|leve|delicada|elegante|thin|light)\b/.test(s) ? 'playfair' : /\b(maquina de escrever|typewriter|mono)\b/.test(s) ? 'spacemono' : /\b(escrita a mao|manuscrita|cursiva|handwritten|caneta)\b/.test(s) ? 'caveat' : /\b(divertida|engracada|cartoon|desenho|quadrinho|comic)\b/.test(s) ? 'bangers' : /\b(estreita|alta e fina|condensada|condensed)\b/.test(s) ? 'bebas' : /\b(redonda|arredondada|fofa|rounded)\b/.test(s) ? 'lilita' : /\b(marcador|pincel|grafite|marker)\b/.test(s) ? 'marker' : null;
@@ -787,6 +812,7 @@ function extraRules({ s, text, spec, prev, ctx, said, warn, ask, set, changed, s
   // --- legenda só nas palavras importantes ---
   if (/\blegenda\b/.test(s) && /\b(so|somente|apenas|only)\b.{0,20}\b(palavras?|words?)\s+(importantes?|chave|fortes?|principais|key|important)\b/.test(s)) { set('captionKeywords', true); said.push('Legenda só nas palavras-chave, uma por vez'); }
   if (/\blegenda\b/.test(s) && /\b(todas as palavras|tudo que (eu )?falo|completa|inteira|every word|all words)\b/.test(s)) { set('captionKeywords', false); said.push('Legenda com todas as palavras'); }
+  if (/\blegenda\b.{0,25}\b(minimalista|calm[oa]|minuscul)/.test(s) && ['dinamico', 'calmo'].includes(spec.captions.style)) { const i = said.findIndex(x => x.startsWith('Estilo: ')); if (i >= 0) { said.splice(i, 1); spec.mix = deepClone(prev ? prev.mix : spec.mix); } }
   momentRules({ s, spec, prev, plan, ctx, said, ranges });
   if (/\b(corta|tira|remove)\s+(o |os )?(ultimos?|final|last)\s+(\d+(?:\.\d+)?)\s*(s|seg\w*|sec\w*)/.test(s) && plan) {
     const n = +s.match(/(\d+(?:\.\d+)?)\s*(s|seg|sec)/)[1]; const tgt = Math.max(3, plan.duration - n);

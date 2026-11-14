@@ -390,6 +390,27 @@ T('manchete "O SEGREDO" em papel amassado', s => s.headline.text === 'O SEGREDO'
 T('manchete "3 erros em 30 segundos"', s => s.headline.text === '3 erros em 30 segundos' && !s.target, P);
 T('muda o texto pra serifa', s => blk(s, 'serifa', 'X'), { prev: interpret('texto na tela "X" papel', base).spec, ctx: { plan } });
 
+// ===== 16. Mais estilos em alta (pesquisa de nov/2026) =====
+const P2 = { prev: base, ctx: { plan } };
+T('texto "onde você tá? | chegando" em conversa de mensagem', (s, e) => blk(s, 'mensagem') && mixHas(s, 'podcast'), P2);
+T('frase "o plano deu certo" recorte de revista', s => blk(s, 'revista'), P2);
+T('texto "leia isso" com marca-texto', s => blk(s, 'marcatexto'), P2);
+T('texto "take that chance" palavra por palavra na batida', (s, e) => blk(s, 'batida') && !e.pacing.beatSync, P2);
+T('texto "arrumando pro jantar" carregando porcentagem', s => blk(s, 'carregando'), P2);
+T('texto "ninguém acreditou" digitando', s => blk(s, 'digitando'), P2);
+T('texto pequeno "presta atenção"', s => blk(s, 'zoom'), P2);
+T('texto "isso mudou tudo" em pílulas', s => blk(s, 'pilulas'), P2);
+T('texto "POV: aprendi" com fundo branco do tiktok', s => blk(s, 'caixa') && fmt(s, 'reels'), P2);
+T('frase "eu só queria" amarelo confissão', s => blk(s, 'confissao'), P2);
+T('texto "devagar também é chegar" estilo calmo', s => blk(s, 'calmo'), P2);
+T('texto "ninguém te conta isso" minimalista', s => blk(s, 'minimal'), P2);
+T('deixa mais calmo', (s, e) => !s.texts.length && e.pacing.avgShot > resolveStyle(base).pacing.avgShot, P2);
+T('legenda com pílulas', s => s.captions.style === 'pilulas', P2);
+T('legenda duas cores alternando', s => s.captions.style === 'duascores', P2);
+T('legenda minimalista dinâmica sem amarelo', (s, e) => s.captions.style === 'dinamico' && !e.captionColor && mixHas(s, 'podcast'), P2);
+T('legenda calma minúscula', s => s.captions.style === 'calmo', P2);
+T('legenda palavra por palavra e texto em círculo "SIGA"', s => s.captions.style === 'hormozi' && s.texts.some(t => t.shape === 'circle'), P2);
+
 // ===== 9. Não deve inventar =====
 T('oi', (s, e, r) => notUnderstood(r));
 T('qual é a capital da França', (s, e, r) => notUnderstood(r));

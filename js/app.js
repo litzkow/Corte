@@ -17,7 +17,7 @@ import { uid, deepClone, clamp, sleep } from './engine/util.js';
 import { icon } from './icons.js';
 import * as store from './store.js';
 
-export const APP_VERSION = '2.2', APP_DATE = '14/11/2026';
+export const APP_VERSION = '2.3', APP_DATE = '14/11/2026';
 
 const $ = s => document.querySelector(s);
 const el = (tag, attrs = {}, ...kids) => { const e = document.createElement(tag); for (const [k, v] of Object.entries(attrs)) { if (k === 'class') e.className = v; else if (k === 'html') e.innerHTML = v; else if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else if (v === true) e.setAttribute(k, ''); else if (v !== false && v != null) e.setAttribute(k, v); } for (const k of kids.flat()) if (k != null) e.append(k.nodeType ? k : document.createTextNode(String(k))); return e; };
@@ -86,7 +86,7 @@ function paintSample(c, t, kind, id, extra = {}) {
   const area = { x: W * 0.06, y: H * 0.1, w: W * 0.88, h: H * 0.75 };
   if (kind === 'style') { const cs = PRESETS[id].captions.style; drawCaption(ctx, groupWords(markEmphasis(SAMPLE), cs), t, cs, area, H * 0.62, {}); }
   else if (kind === 'cap') drawCaption(ctx, groupWords(markEmphasis(SAMPLE), id), t, id, area, H * 0.66, {});
-  else if (kind === 'block') drawTextBlock(ctx, { text: extra.text || ({ serifa: 'Agora a meta é ficar forte', contorno: 'Me dá 10 minutos que eu resolvo', papel: '27 horas de viagem' })[id], style: id, start: 0, dur: 99, y: 0.42 }, t + 0.8, W, H, area);
+  else if (kind === 'block') drawTextBlock(ctx, { text: extra.text || TEXT_STYLES[id].sample, style: id, start: 0, dur: 4.6, y: TEXT_STYLES[id].render === 'loading' ? 0.3 : 0.42, beats: [0.2, 0.6, 1, 1.4, 1.8, 2.2, 2.6, 3, 3.4, 3.8] }, t, W, H, area);
   else if (kind === 'shape') drawShape(ctx, { shape: id, text: extra.text || 'SIGA PARA MAIS', x: 0.5, y: id === 'arc' ? 0.22 : 0.42, size: 1, start: 0, dur: 99, color: extra.color || '#FFFFFF', accent: '#FFE81F' }, t + 0.6, W, H, null);
 }
 function animCanvases(selector) {
@@ -576,7 +576,7 @@ function textSheet() {
   const head = el('input', { type: 'text', value: (sp.headline && sp.headline.text) || '', placeholder: 'Ex.: 3 erros que todo mundo comete', 'aria-label': 'Manchete' });
   // texto na tela: frase em bloco nos estilos em alta
   let bstyle = 'serifa', ball = true;
-  const btxt = el('textarea', { rows: '2', maxlength: '160', placeholder: 'Ex.: Dane-se o projeto verão. Agora a meta é ficar forte', 'aria-label': 'Frase do texto na tela' });
+  const btxt = el('textarea', { rows: '2', maxlength: '200', placeholder: 'Ex.: Dane-se o projeto verão. Agora a meta é ficar forte. Em conversa de mensagem, separe as falas com |', 'aria-label': 'Frase do texto na tela' });
   const bg = el('div', { class: 'gal' });
   const bupd = () => { [...bg.children].forEach(b => b.classList.toggle('on', b.dataset.id === bstyle)); bg.querySelectorAll('canvas').forEach(c => { if (btxt.value.trim()) c.dataset.text = btxt.value.trim(); else delete c.dataset.text; }); };
   for (const [id, st] of Object.entries(TEXT_STYLES)) bg.append(galBtn('block', id, st.label, st.desc, false, () => { bstyle = id; bupd(); }));

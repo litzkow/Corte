@@ -22,7 +22,7 @@ Tudo acontece no navegador do aparelho. Os vídeos não vão para servidor nenhu
 - Análise: silêncios e pausas, fala, batidas e BPM da música, trocas de cena, movimento, tremor,
   exposição, nitidez, rosto (para reenquadrar).
 - Diretor: entende pedidos em português e inglês, com gíria e erro de digitação, e sempre mostra o que entendeu.
-  Banco de 327 frases testadas, do simples ao complexo. Exemplos:
+  Banco de 345 frases testadas, do simples ao complexo. Exemplos:
   - momentos: "câmera lenta no final e um freeze no comecinho", "congela aqui por 2 segundos",
     "acelera de 0:10 a 0:15", "tira esse pedaço", "tira os primeiros 3 segundos", "começa direto no 0:12";
   - legenda: "a legenda tá muito grande", "letra mais grossa", "caixa alta", "legenda só nas palavras importantes";
@@ -31,8 +31,11 @@ Tudo acontece no navegador do aparelho. Os vídeos não vão para servidor nenhu
   - imagem: "mais nitidez", "aumenta o contraste", "deixa mais claro e mais vivo", "segue meu rosto", "zoom lento";
   - geral: "dá uma melhorada geral", "não gostei" (outra montagem), "faz um de 15 e um de 60 segundos",
     "transição de zoom", "barra de progresso embaixo", "gostei, exporta".
-- 18 estilos de edição, 11 looks de cor, 20 estilos de legenda, 18 fontes, 8 textos com forma.
-- Texto na tela nos estilos em alta: serifa curvada, contorno branco (o do Edits) e papel amassado.
+- 18 estilos de edição, 11 looks de cor, 24 estilos de legenda, 19 fontes, 8 textos com forma.
+- 15 estilos de texto na tela em alta (pesquisa de nov/2026): serifa curvada, contorno branco (Edits),
+  papel amassado, minimalista dinâmico, caixa do TikTok, pílulas coloridas, amarelo confissão,
+  estética calma, conversa de mensagem (falas separadas por |), recorte de revista, marca-texto,
+  palavra na batida da música, texto pequeno com zoom, carregando % e digitando.
   Pela folha Texto ou pedindo: texto na tela "27 horas de viagem" estilo papel amassado.
 - Som: mixagem a -14 LUFS com pico -1 dB, música abaixa sozinha quando alguém fala, efeitos sonoros
   sintetizados (sem direitos autorais), música tirada de qualquer vídeo seu.

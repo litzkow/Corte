@@ -537,7 +537,13 @@ export function buildPlan({ spec, items, music, outputIndex = 0, seed = 1, trans
     if (tx.shape === 'block') {
       // frase em bloco (serifa curvada, contorno branco, papel amassado)
       const st = tx.from != null ? clamp(tx.from, 0, total - 0.5) : 0;
-      overlays.push({ id: uid('t'), kind: 'block', style: tx.style || 'contorno', text: tx.text, color: tx.color || null, y: tx.y != null ? tx.y : null, start: st, dur: tx.all === false ? Math.min(total - st, tx.dur || 4) : total - st });
+      let beats = null;
+      if (tx.style === 'batida') {
+        // palavras entram nas batidas da música; sem música, no começo de cada palavra falada
+        if (music && audioPlan.music) beats = music.beats.map(b => b.t - audioPlan.music.in + (audioPlan.music.start || 0)).filter(x => x >= st && x <= total).map(x => +x.toFixed(3));
+        else if (captions.length) beats = captions.map(w => +w.t0.toFixed(3)).filter(x => x >= st);
+      }
+      overlays.push({ id: uid('t'), kind: 'block', style: tx.style || 'contorno', text: tx.text, color: tx.color || null, y: tx.y != null ? tx.y : null, start: st, dur: tx.all === false ? Math.min(total - st, tx.dur || 4) : total - st, beats });
       decisions.push(`Texto na tela (${tx.style || 'contorno'}): "${tx.text}"${tx.all === false ? ' nos primeiros segundos' : ' o vídeo todo'}.`);
       continue;
     }

@@ -20,6 +20,7 @@ export const FONTS = {
   lilita: { family: 'Lilita One', google: 'Lilita+One', fallback: 'Inter' },
   instrument: { family: 'Instrument Serif', google: 'Instrument+Serif:ital@0;1', fallback: 'Lora' },
   nunito: { family: 'Nunito', google: 'Nunito:wght@800;900', fallback: 'Poppins' },
+  garamond: { family: 'EB Garamond', google: 'EB+Garamond:ital,wght@0,500;1,500', fallback: 'Lora' },
   inter: { family: 'Inter', google: null, fallback: 'Inter' },
   lora: { family: 'Lora', google: null, fallback: 'Lora' },
 };
@@ -58,6 +59,10 @@ export const CAPTION_STYLES = {
   outline:  { label: 'Contorno vazado', desc: 'Letras vazadas; a palavra falada preenche.', font: 'archivo', weight: 400, upper: true, size: 0.085, maxWords: 3, fill: 'transparent', stroke: '#FFFFFF', strokeW: 0.035, active: { fill: '#FFFFFF' }, enter: 'fade' },
   retro3d:  { label: '3D retrô', desc: 'Letra com volume em camadas, cor de fliperama.', font: 'rubikmono', weight: 400, upper: true, size: 0.068, maxWords: 2, fill: '#FFE81F', stroke: '#1B0A3C', strokeW: 0.08, extrude: ['#FF2BD6', 6], enter: 'pop' },
   travel:   { label: 'Escrito à mão', desc: 'Letra de caneta, levemente torta. Viagem e vlog.', font: 'caveat', weight: 700, upper: false, size: 0.1, maxWords: 3, fill: '#FFFFFF', stroke: null, shadow: [0, 0.03, 0.15, 'rgba(0,0,0,.6)'], enter: 'rise', tilt: 5 },
+  dinamico: { label: 'Minimalista dinâmico', desc: 'A legenda que substituiu a amarela em 2026: branca, grossa, contorno preto, 2 ou 3 palavras, sem cor extra.', font: 'montserrat', weight: 900, upper: false, size: 0.08, maxWords: 3, fill: '#FFFFFF', stroke: '#000000', strokeW: 0.17, shadow: [0, 0.05, 0.1, 'rgba(0,0,0,.45)'], active: { scale: 1.06 }, enter: 'pop' },
+  pilulas:  { label: 'Pílulas coloridas', desc: 'Cada palavra numa pílula de cor sólida: preta, branca, amarela e vermelha.', font: 'poppins', weight: 800, upper: false, size: 0.064, maxWords: 3, fill: '#FFFFFF', stroke: null, pills: ['#111111', '#FFFFFF', '#FFE14D', '#FF4D4D'], enter: 'pop' },
+  duascores:{ label: 'Duas cores alternando', desc: 'Uma palavra branca, outra amarela, alternando. Bom para vídeos curtos.', font: 'montserrat', weight: 900, upper: true, size: 0.08, maxWords: 3, fill: '#FFFFFF', stroke: '#000000', strokeW: 0.16, alt: ['#FFFFFF', '#FFE14D'], enter: 'pop' },
+  calmo:    { label: 'Estética calma', desc: 'Minúscula, serifa fina, amarelo-manteiga, frase inteira e sem animação.', font: 'garamond', weight: 500, italic: true, upper: false, lower: true, size: 0.062, maxWords: 7, fill: '#F6E7A1', stroke: null, shadow: [0, 0.03, 0.25, 'rgba(0,0,0,.5)'], enter: 'fade', mode: 'sentence' },
   serifa:   { label: 'Serifa curvada', desc: 'Serifa creme em bloco, cada linha levemente curvada. Tendência dos Reels.', font: 'instrument', weight: 400, upper: false, size: 0.1, lh: 0.95, maxWords: 5, fill: '#F7EEDC', stroke: null, shadow: [0, 0.04, 0.3, 'rgba(0,0,0,.5)'], curve: 0.16, enter: 'rise', mode: 'sentence' },
   contorno: { label: 'Contorno branco', desc: 'Letra arredondada branca, contorno escuro fino e borda branca por fora. O texto do Edits.', font: 'nunito', weight: 900, upper: false, size: 0.066, maxWords: 6, fill: '#FFFFFF', stroke: '#2B2B2B', strokeW: 0.07, outer: '#FFFFFF', outerW: 0.17, shadow: [0, 0.03, 0.14, 'rgba(0,0,0,.35)'], enter: 'pop', mode: 'sentence' },
   papel:    { label: 'Papel amassado', desc: 'Letra preta grossa recortada em papel branco amassado, com sombra.', font: 'lilita', weight: 400, upper: true, size: 0.12, lh: 1.02, maxWords: 2, fill: '#141414', stroke: null, outer: 'paper', outerW: 0.28, shadow: [0.02, 0.07, 0.2, 'rgba(0,0,0,.55)'], enter: 'slam', tilt: 2 },
@@ -98,7 +103,7 @@ function setFont(ctx, st, px, over = {}) {
   const f = over.font || st.font, wgt = wgtFor(f, over.weight || st.weight), it = over.italic != null ? over.italic : st.italic;
   ctx.font = `${it ? 'italic ' : ''}${wgt} ${Math.round(px)}px ${fam(f)}`;
 }
-const up = (st, s, over = {}) => (over.upper != null ? over.upper : st.upper) ? s.toLocaleUpperCase('pt-BR') : s;
+const up = (st, s, over = {}) => (over.upper != null ? over.upper : st.upper) ? s.toLocaleUpperCase('pt-BR') : st.lower ? s.toLocaleLowerCase('pt-BR') : s;
 
 // quebra em linhas para caber na largura
 function layoutLines(ctx, st, words, px, maxW) {
@@ -109,7 +114,7 @@ function layoutLines(ctx, st, words, px, maxW) {
   for (const w of words) {
     const o = w.emph && st.emph ? st.emph : {};
     setFont(ctx, st, px * (o.scaleSize || 1), o);
-    const ww = ctx.measureText(up(st, w.w, o)).width * grow;
+    const ww = ctx.measureText(up(st, w.w, o)).width * grow + (st.pills ? px * 0.5 : 0);
     if (line.length && lw + space + ww > maxW) { lines.push({ words: line, w: lw }); line = []; lw = 0; }
     line.push({ ...w, mw: ww, o }); lw += (line.length > 1 ? space : 0) + ww;
   }
@@ -201,6 +206,7 @@ export function drawCaption(ctx, groups, t, styleId, area, cy, opts = {}) {
   // faixa de fundo (documentário / máquina de escrever)
   if (st.bar) { const bw = Math.max(...lines.map(l => l.w)) + px * 0.9; ctx.fillStyle = st.bar; roundRect(ctx, cx - bw / 2, y0 - lh / 2 - px * 0.2, bw, totalH + px * 0.4, px * 0.18); ctx.fill(); }
   let charBudget = st.enter === 'type' ? Math.floor(age * 28) : Infinity;
+  let wk = 0;
   for (let li = 0; li < lines.length; li++) {
     const line = lines[li];
     let x = cx - line.w / 2;
@@ -219,6 +225,9 @@ export function drawCaption(ctx, groups, t, styleId, area, cy, opts = {}) {
       const ww = ctx.measureText(text).width;
       const slot = w.mw || ww; const pad = (slot - ww) / 2;
       x += pad;
+      if (st.alt) fill = active && opts.color ? opts.color : st.alt[(gi * 3 + wk) % st.alt.length];
+      if (st.pills) { const bg = st.pills[(gi * 3 + wk) % st.pills.length]; ctx.save(); ctx.shadowColor = 'rgba(0,0,0,.3)'; ctx.shadowBlur = pxw * 0.15; ctx.shadowOffsetY = pxw * 0.05; ctx.fillStyle = bg; roundRect(ctx, x - pxw * 0.22, y0 - pxw * 0.64, ww + pxw * 0.44, pxw * 1.28, pxw * 0.64); ctx.fill(); ctx.restore(); fill = lum(bg) > 0.6 ? '#111111' : '#FFFFFF'; }
+      wk++;
       // pílula e caixa
       if (active && st.active && st.active.box) { ctx.fillStyle = st.active.box; roundRect(ctx, x - pxw * 0.14, y0 - pxw * 0.6, ww + pxw * 0.28, pxw * 1.2, pxw * 0.2); ctx.fill(); }
       ctx.save();
@@ -380,10 +389,26 @@ export function drawShape(ctx, el, t, W, H, subject) {
 }
 
 // ---------------- TEXTO NA TELA (frase em bloco, estilos em alta) ----------------
+// render: como desenhar. 'plain' (preenche/contorna), 'curve' (lente), 'box' (caixa por linha),
+// 'pills' (pílula por palavra), 'bubble' (conversa de mensagem), 'ransom' (recorte de revista),
+// 'marker' (marca-texto), 'reveal' (palavra por palavra na batida), 'zoom' (pequeno que cresce),
+// 'loading' (porcentagem subindo), 'typing' (letra por letra).
 export const TEXT_STYLES = {
-  serifa:   { label: 'Serifa curvada', desc: 'Frase em serifa creme, linhas curvadas como lente. O texto dos Reels de 2026.', font: 'instrument', weight: 400, upper: false, size: 0.16, lh: 0.9, fill: '#F7EEDC', shadow: [0, 0.03, 0.3, 'rgba(0,0,0,.5)'], curve: 0.22, bulge: 0.1, y: 0.32, enter: 'rise' },
-  contorno: { label: 'Contorno branco', desc: 'Branca e arredondada, contorno escuro fino e borda branca. O texto do Edits.', font: 'nunito', weight: 900, upper: false, size: 0.066, lh: 1.14, spacing: 0.03, fill: '#FFFFFF', stroke: '#2B2B2B', strokeW: 0.055, outer: '#FFFFFF', outerW: 0.17, shadow: [0, 0.03, 0.14, 'rgba(0,0,0,.35)'], y: 0.36, enter: 'pop' },
-  papel:    { label: 'Papel amassado', desc: 'Preta e grossa, recortada em papel branco amassado com sombra.', font: 'lilita', weight: 400, upper: true, size: 0.17, lh: 1.0, fill: '#141414', outer: 'paper', outerW: 0.26, shadow: [0.02, 0.06, 0.22, 'rgba(0,0,0,.55)'], y: 0.56, enter: 'slam', tilt: -1.5 },
+  serifa:    { label: 'Serifa curvada', desc: 'Frase em serifa creme, linhas curvadas como lente. O texto dos Reels de 2026.', render: 'curve', font: 'instrument', weight: 400, upper: false, size: 0.16, lh: 0.9, fill: '#F7EEDC', shadow: [0, 0.03, 0.3, 'rgba(0,0,0,.5)'], curve: 0.22, bulge: 0.1, y: 0.32, enter: 'rise', sample: 'Agora a meta é ficar forte' },
+  contorno:  { label: 'Contorno branco', desc: 'Branca e arredondada, contorno escuro fino e borda branca. O texto do Edits.', font: 'nunito', weight: 900, upper: false, size: 0.066, lh: 1.14, spacing: 0.03, fill: '#FFFFFF', stroke: '#2B2B2B', strokeW: 0.055, outer: '#FFFFFF', outerW: 0.17, shadow: [0, 0.03, 0.14, 'rgba(0,0,0,.35)'], y: 0.36, enter: 'pop', sample: 'Me dá 10 minutos que eu resolvo' },
+  papel:     { label: 'Papel amassado', desc: 'Preta e grossa, recortada em papel branco amassado com sombra.', font: 'lilita', weight: 400, upper: true, size: 0.17, lh: 1.0, fill: '#141414', outer: 'paper', outerW: 0.26, shadow: [0.02, 0.06, 0.22, 'rgba(0,0,0,.55)'], y: 0.56, enter: 'slam', tilt: -1.5, sample: '27 horas de viagem' },
+  minimal:   { label: 'Minimalista dinâmico', desc: 'A "nova meta" de 2026: branca, grossa, contorno preto, sem cores extras.', font: 'montserrat', weight: 900, upper: false, size: 0.085, lh: 1.08, fill: '#FFFFFF', stroke: '#000000', strokeW: 0.16, shadow: [0, 0.04, 0.12, 'rgba(0,0,0,.45)'], y: 0.42, enter: 'pop', sample: 'Ninguém te conta isso' },
+  caixa:     { label: 'Caixa do TikTok', desc: 'Texto preto em caixa branca arredondada por linha, igual ao texto nativo do TikTok e do Instagram.', render: 'box', font: 'poppins', weight: 800, upper: false, size: 0.064, lh: 1.32, fill: '#111111', box: '#FFFFFF', y: 0.4, enter: 'pop', sample: 'POV: você finalmente aprendeu a editar' },
+  pilulas:   { label: 'Pílulas coloridas', desc: 'Cada palavra numa pílula de cor sólida. Tendência que subiu em 2026.', render: 'pills', font: 'poppins', weight: 800, upper: false, size: 0.07, lh: 1.5, pills: ['#111111', '#FFFFFF', '#FFE14D', '#FF4D4D'], y: 0.42, enter: 'pop', sample: 'isso mudou minha rotina' },
+  confissao: { label: 'Amarelo confissão', desc: 'Frase grande em amarelo sobre vídeo calmo, como pensamento sincero.', font: 'inter', weight: 800, upper: false, size: 0.072, lh: 1.18, fill: '#FFE14D', shadow: [0, 0.04, 0.3, 'rgba(0,0,0,.55)'], y: 0.42, enter: 'rise', sample: 'eu só queria que alguém tivesse me falado isso antes' },
+  calmo:     { label: 'Estética calma', desc: 'Tudo minúsculo, serifa fina, amarelo-manteiga, sem animação. O "quiet aesthetic".', font: 'garamond', weight: 500, upper: false, lower: true, italic: true, size: 0.07, lh: 1.15, fill: '#F6E7A1', shadow: [0, 0.03, 0.25, 'rgba(0,0,0,.45)'], y: 0.5, enter: 'fade', sample: 'devagar também é chegar' },
+  mensagem:  { label: 'Conversa de mensagem', desc: 'Balões de iMessage, um depois do outro. Separe as falas com | (barra).', render: 'bubble', font: 'inter', weight: 500, upper: false, size: 0.05, lh: 1.25, fill: '#FFFFFF', y: 0.4, enter: 'pop', sample: 'onde você tá? | chegando, 5 min | você disse isso faz 1 hora' },
+  revista:   { label: 'Recorte de revista', desc: 'Cada palavra recortada de um jornal ou revista diferente, colada torta.', render: 'ransom', font: 'anton', weight: 400, upper: false, size: 0.085, lh: 1.45, y: 0.42, enter: 'pop', sample: 'o plano deu certo' },
+  marcatexto:{ label: 'Marca-texto', desc: 'Faixa amarela de marca-texto passando por trás da frase.', render: 'marker', font: 'inter', weight: 800, upper: false, size: 0.074, lh: 1.3, fill: '#111111', marker: 'rgba(255,225,60,.92)', y: 0.42, enter: 'wipe', sample: 'leia isso antes de desistir' },
+  batida:    { label: 'Palavra na batida', desc: 'As palavras aparecem uma de cada vez, no ritmo da música.', render: 'reveal', font: 'montserrat', weight: 900, upper: true, size: 0.09, lh: 1.08, fill: '#FFFFFF', stroke: '#000000', strokeW: 0.14, shadow: [0, 0.04, 0.12, 'rgba(0,0,0,.45)'], y: 0.42, enter: 'none', sample: 'take that chance cause you might grow' },
+  zoom:      { label: 'Texto pequeno com zoom', desc: 'Frase pequena no meio que vai crescendo devagar.', render: 'zoom', font: 'inter', weight: 700, upper: false, size: 0.042, lh: 1.2, fill: '#FFFFFF', shadow: [0, 0.04, 0.3, 'rgba(0,0,0,.6)'], y: 0.48, enter: 'fade', sample: 'presta atenção no final' },
+  carregando:{ label: 'Carregando %', desc: 'A frase com uma porcentagem que sobe de 0% a 100% até o fim.', render: 'loading', font: 'spacemono', weight: 700, upper: false, size: 0.058, lh: 1.25, fill: '#FFFFFF', shadow: [0, 0.03, 0.25, 'rgba(0,0,0,.6)'], y: 0.22, enter: 'fade', sample: 'arrumando pro jantar' },
+  digitando: { label: 'Digitando', desc: 'A frase aparece letra por letra, com cursor piscando.', render: 'typing', font: 'spacemono', weight: 700, upper: false, size: 0.056, lh: 1.3, fill: '#FFFFFF', box: 'rgba(0,0,0,.62)', y: 0.42, enter: 'none', sample: 'ninguém acreditou quando eu disse' },
 };
 const wrapText = (ctx, text, maxW) => {
   const out = [];
@@ -394,61 +419,176 @@ const wrapText = (ctx, text, maxW) => {
   }
   return out;
 };
-// el = { text, style, x?, y? (0..1, centro), size?, start, dur, color? }
+const fontStr = (st, px, over = {}) => `${(over.italic != null ? over.italic : st.italic) ? 'italic ' : ''}${wgtFor(over.font || st.font, over.weight || st.weight)} ${Math.round(px)}px ${fam(over.font || st.font)}`;
+const setSpacing = (ctx, v) => { if ('letterSpacing' in ctx) ctx.letterSpacing = v ? `${v.toFixed(1)}px` : '0px'; };
+const hashN = (i, k = 1) => { const x = Math.sin(i * 127.1 + k * 311.7) * 43758.5453; return x - Math.floor(x); };
+const lum = c => { const m = String(c).match(/^#(..)(..)(..)/); if (!m) return 1; return (0.299 * parseInt(m[1], 16) + 0.587 * parseInt(m[2], 16) + 0.114 * parseInt(m[3], 16)) / 255; };
+const RANSOM = [
+  { font: 'anton', bg: '#F4EFE2', fg: '#111111' }, { font: 'playfair', bg: '#111111', fg: '#FFFFFF', italic: true }, { font: 'spacemono', bg: '#FFE14D', fg: '#111111' },
+  { font: 'bebas', bg: '#FFFFFF', fg: '#C8102E' }, { font: 'lilita', bg: '#D9E8F5', fg: '#111111' }, { font: 'instrument', bg: '#FFFFFF', fg: '#111111' }, { font: 'archivo', bg: '#E63946', fg: '#FFFFFF' },
+];
+
+// el = { text, style, x?, y? (0..1, centro), size?, start, dur, color?, beats? (tempos no vídeo) }
 export function drawTextBlock(ctx, el, t, W, H, area) {
   const age = t - el.start; if (age < 0 || age > el.dur) return;
   const st = TEXT_STYLES[el.style] || TEXT_STYLES.contorno;
-  const font = st.font, wgt = wgtFor(font, st.weight);
-  const maxW = (area ? area.w : W * 0.88) * 0.94;
-  let px = W * st.size * (el.size || 1), lines;
-  const text = st.upper ? String(el.text).toLocaleUpperCase('pt-BR') : String(el.text);
-  // diminui até caber em no máximo 6 linhas e na largura
+  const R = st.render || 'plain';
+  const maxW = (area ? area.w : W * 0.88) * (R === 'bubble' ? 0.72 : 0.94);
+  let text = String(el.text);
+  if (st.upper) text = text.toLocaleUpperCase('pt-BR'); else if (st.lower) text = text.toLocaleLowerCase('pt-BR');
+  const cx = (el.x != null ? el.x : 0.5) * W, cy = (el.y != null ? el.y : st.y) * H;
+  const outA = clamp((el.dur - age) / 0.25, 0, 1);
+  let px = W * st.size * (el.size || 1);
+  const fill = el.color || st.fill;
+  ctx.save(); ctx.textBaseline = 'middle'; ctx.lineJoin = 'round'; ctx.miterLimit = 2;
+
+  if (R === 'bubble') { drawBubbles(ctx, st, text, age, cx, cy, px, maxW, W, outA); ctx.restore(); return; }
+  if (R === 'loading') {
+    const pct = Math.floor(clamp(age / Math.max(0.5, el.dur - 0.4), 0, 1) * 100);
+    ctx.font = fontStr(st, px); ctx.textAlign = 'center'; ctx.globalAlpha = outA * clamp(age / 0.2, 0, 1);
+    const lines = wrapText(ctx, text, maxW); const lh = px * st.lh; let y = cy - (lines.length) * lh / 2;
+    ctx.shadowOffsetY = st.shadow[1] * px; ctx.shadowBlur = st.shadow[2] * px; ctx.shadowColor = st.shadow[3]; ctx.fillStyle = fill;
+    for (const ln of lines) { ctx.fillText(ln, cx, y); y += lh; }
+    ctx.font = fontStr(st, px * 1.5); ctx.fillText(pct + '%', cx, y + px * 0.25);
+    const bw = maxW * 0.6, bh = px * 0.28, by = y + px * 1.25; ctx.shadowColor = 'transparent';
+    ctx.fillStyle = 'rgba(255,255,255,.25)'; roundRect(ctx, cx - bw / 2, by, bw, bh, bh / 2); ctx.fill();
+    ctx.fillStyle = fill; roundRect(ctx, cx - bw / 2, by, Math.max(bh, bw * pct / 100), bh, bh / 2); ctx.fill();
+    ctx.restore(); return;
+  }
+  if (R === 'zoom') px *= 1 + 0.9 * ease.inOut(clamp(age / Math.max(1, el.dur), 0, 1));
+
+  // ajusta o tamanho para caber (no máximo 6 linhas)
+  let lines;
   for (let k = 0; k < 14; k++) {
-    ctx.font = `${wgt} ${Math.round(px)}px ${fam(font)}`; if ('letterSpacing' in ctx) ctx.letterSpacing = st.spacing ? `${(st.spacing * px).toFixed(1)}px` : '0px';
-    lines = wrapText(ctx, text, maxW);
-    const tooWide = lines.some(l => ctx.measureText(l).width > maxW * 1.02);
-    if (lines.length <= 6 && !tooWide) break;
+    ctx.font = fontStr(st, px); setSpacing(ctx, st.spacing ? st.spacing * px : 0);
+    lines = wrapText(ctx, text, R === 'pills' || R === 'ransom' ? maxW * 0.9 : maxW);
+    if (lines.length <= 6 && !lines.some(l => ctx.measureText(l).width > maxW * 1.02)) break;
     px *= 0.9;
   }
-  const lh = px * st.lh, cx = (el.x != null ? el.x : 0.5) * W;
-  const cy = (el.y != null ? el.y : st.y) * H;
+  const lh = px * st.lh;
   const y0 = cy - (lines.length - 1) * lh / 2;
-  const outA = clamp((el.dur - age) / 0.25, 0, 1);
-  ctx.save(); ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.lineJoin = 'round'; ctx.miterLimit = 2;
-  const fill = el.color || st.fill;
+  // palavra por palavra: quando cada palavra aparece
+  const allWords = lines.flatMap(l => l.split(' '));
+  let shownWords = allWords.length, shownChars = Infinity;
+  if (R === 'reveal') {
+    const beats = (el.beats || []).filter(b => b >= el.start - 0.01).map(b => b - el.start);
+    const step = 0.42;
+    const times = allWords.map((_, i) => beats.length > i ? beats[i] : (beats.length ? beats[beats.length - 1] + (i - beats.length + 1) * step : i * step));
+    shownWords = times.filter(x => x <= age).length;
+  }
+  if (R === 'typing') shownChars = Math.floor(age * 16);
+  let wi = 0, ci = 0;
+  ctx.textAlign = 'left';
   lines.forEach((ln, li) => {
-    const la = age - li * 0.07; if (la < 0) return;
+    const la = age - li * 0.07;
+    if (la < 0 && st.enter !== 'none') return;
     let sc = 1, alpha = 1, dy = 0;
     if (st.enter === 'pop') { const e = clamp(la / 0.18, 0, 1); sc = 0.75 + 0.25 * ease.back(e); alpha = clamp(la / 0.08, 0, 1); }
     else if (st.enter === 'rise') { const e = clamp(la / 0.35, 0, 1); dy = (1 - ease.out(e)) * px * 0.35; alpha = e; }
     else if (st.enter === 'slam') { const e = clamp(la / 0.14, 0, 1); sc = 1.6 - 0.6 * ease.out(e); alpha = e; }
+    else if (st.enter === 'fade') alpha = clamp(age / 0.6, 0, 1);
     ctx.globalAlpha = alpha * outA;
     const y = y0 + li * lh + dy;
-    ctx.font = `${wgt} ${Math.round(px)}px ${fam(font)}`; if ('letterSpacing' in ctx) ctx.letterSpacing = st.spacing ? `${(st.spacing * px).toFixed(1)}px` : '0px';
+    ctx.font = fontStr(st, px); setSpacing(ctx, st.spacing ? st.spacing * px : 0);
     const lw = ctx.measureText(ln).width;
     ctx.save(); ctx.translate(cx, y); ctx.scale(sc, sc); if (st.tilt) ctx.rotate((li % 2 ? -1 : 1) * st.tilt * Math.PI / 180); ctx.translate(-cx, -y);
-    if (st.curve) {
-      // letra por letra numa curva suave, maiores no meio (efeito lente)
-      const chars = [...ln]; const ws = chars.map(c => ctx.measureText(c).width);
-      const half = lw / 2; let x = cx - half;
-      const parts = chars.map((c, i) => { const mid = x + ws[i] / 2; x += ws[i]; const u = (mid - cx) / Math.max(1, half); return { c, mid, u }; });
-      for (const pass of ['shadow', 'fill']) for (const p of parts) {
-        const k = 1 + (st.bulge || 0) * (1 - p.u * p.u);
-        const yy = y + st.curve * px * p.u * p.u * (lines.length > 1 ? 1 : 0.6);
-        const ang = 0.6 * Math.atan(2 * st.curve * px * p.u / Math.max(1, half));
-        ctx.save(); ctx.translate(cx + (p.mid - cx) * (1 + (st.bulge || 0) * 0.5), yy); ctx.rotate(ang); ctx.scale(k, k);
-        ctx.font = `${wgt} ${Math.round(px)}px ${fam(font)}`; ctx.textAlign = 'center';
-        if (pass === 'shadow') { ctx.shadowOffsetX = st.shadow[0] * px; ctx.shadowOffsetY = st.shadow[1] * px; ctx.shadowBlur = st.shadow[2] * px; ctx.shadowColor = st.shadow[3]; ctx.fillStyle = fill; ctx.fillText(p.c, 0, 0); }
-        else { ctx.fillStyle = fill; ctx.fillText(p.c, 0, 0); }
-        ctx.restore();
+    if (R === 'curve') drawCurveLine(ctx, st, ln, cx, y, px, lw, fill, lines.length);
+    else if (R === 'box') {
+      ctx.fillStyle = el.boxColor || st.box; roundRect(ctx, cx - lw / 2 - px * 0.32, y - lh / 2 + px * 0.04, lw + px * 0.64, lh - px * 0.08, px * 0.26); ctx.fill();
+      ctx.fillStyle = fill; ctx.fillText(ln, cx - lw / 2, y + px * 0.03);
+    } else if (R === 'pills' || R === 'ransom') {
+      const ws = ln.split(' '); const gap = px * (R === 'pills' ? 0.22 : 0.28);
+      const items = ws.map((w, k) => {
+        const gi = wi + k, cfg = R === 'ransom' ? RANSOM[Math.floor(hashN(gi, 3) * RANSOM.length)] : null;
+        const f = cfg ? { font: cfg.font, weight: cfg.font === 'playfair' ? 700 : 400, italic: !!cfg.italic } : {};
+        const pxw = px * (cfg ? 0.85 + hashN(gi, 5) * 0.35 : 1);
+        ctx.font = fontStr(st, pxw, f); const tw = ctx.measureText(w).width;
+        return { w, gi, cfg, f, pxw, tw, bw: tw + pxw * 0.5 };
+      });
+      const total = items.reduce((a, b) => a + b.bw, 0) + gap * (items.length - 1);
+      let x = cx - total / 2;
+      for (const it of items) {
+        const bg = R === 'pills' ? (el.color ? el.color : st.pills[it.gi % st.pills.length]) : it.cfg.bg;
+        const fg = R === 'pills' ? (lum(bg) > 0.6 ? '#111111' : '#FFFFFF') : it.cfg.fg;
+        const rot = R === 'ransom' ? (hashN(it.gi, 7) - 0.5) * 0.14 : 0;
+        const e = clamp((la - (it.gi - wi) * 0.05) / 0.16, 0, 1); const s2 = 0.7 + 0.3 * ease.back(e);
+        ctx.save(); ctx.translate(x + it.bw / 2, y + (R === 'ransom' ? (hashN(it.gi, 9) - 0.5) * px * 0.2 : 0)); ctx.rotate(rot); ctx.scale(s2, s2);
+        ctx.shadowColor = 'rgba(0,0,0,.35)'; ctx.shadowBlur = px * 0.15; ctx.shadowOffsetY = px * 0.06;
+        ctx.fillStyle = bg;
+        if (R === 'pills') { roundRect(ctx, -it.bw / 2, -it.pxw * 0.66, it.bw, it.pxw * 1.32, it.pxw * 0.66); ctx.fill(); }
+        else { ctx.beginPath(); const hw = it.bw / 2, hh = it.pxw * 0.7; ctx.moveTo(-hw, -hh + hashN(it.gi, 11) * 4); ctx.lineTo(hw - hashN(it.gi, 12) * 5, -hh); ctx.lineTo(hw, hh - hashN(it.gi, 13) * 4); ctx.lineTo(-hw + hashN(it.gi, 14) * 5, hh); ctx.closePath(); ctx.fill(); }
+        ctx.shadowColor = 'transparent'; ctx.font = fontStr(st, it.pxw, it.f); ctx.fillStyle = fg; ctx.textAlign = 'center'; ctx.fillText(it.w, 0, it.pxw * 0.04);
+        ctx.restore(); x += it.bw + gap;
       }
+      wi += ws.length;
+    } else if (R === 'marker') {
+      const e = clamp((age - 0.1 - li * 0.35) / 0.4, 0, 1);
+      ctx.fillStyle = st.marker; ctx.beginPath();
+      const mx = cx - lw / 2 - px * 0.18, mw = (lw + px * 0.36) * ease.out(e), mt = y - px * 0.42, mb = y + px * 0.48;
+      ctx.moveTo(mx, mt + px * 0.05); ctx.lineTo(mx + mw, mt); ctx.lineTo(mx + mw + px * 0.05, mb); ctx.lineTo(mx, mb - px * 0.04); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = fill; ctx.fillText(ln, cx - lw / 2, y + px * 0.03);
+    } else if (R === 'reveal') {
+      const ws = ln.split(' '); const space = ctx.measureText(' ').width; let x = cx - lw / 2;
+      for (const w of ws) { const ww = ctx.measureText(w).width; if (wi < shownWords) drawWord(ctx, st, w, x, y, px, { fill, stroke: st.stroke, strokeW: st.strokeW, shadow: st.shadow }); x += ww + space; wi++; }
+    } else if (R === 'typing') {
+      const n = clamp(shownChars, 0, ln.length); const part = ln.slice(0, n); const pw = ctx.measureText(part).width;
+      if (n > 0 || li === 0) {
+        ctx.fillStyle = st.box; roundRect(ctx, cx - lw / 2 - px * 0.3, y - lh / 2, Math.max(px * 0.6, pw + px * 0.75), lh, px * 0.12); ctx.fill();
+        ctx.fillStyle = fill; ctx.fillText(part, cx - lw / 2, y);
+        const here = (shownChars >= 0 && shownChars <= ln.length) || (li === lines.length - 1 && shownChars > ln.length);
+        if (here && Math.floor(t * 2.5) % 2 === 0) ctx.fillRect(cx - lw / 2 + pw + px * 0.05, y - px * 0.42, px * 0.09, px * 0.84);
+      }
+      shownChars -= ln.length + 1;
     } else {
       drawWord(ctx, st, ln, cx - lw / 2, y, px, { fill, stroke: st.stroke, strokeW: st.strokeW, shadow: st.shadow, outer: st.outer, outerW: st.outerW });
     }
     ctx.restore();
   });
-  if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
+  setSpacing(ctx, 0);
   ctx.restore();
+}
+function drawCurveLine(ctx, st, ln, cx, y, px, lw, fill, nLines) {
+  // letra por letra numa curva suave, maiores no meio (efeito lente)
+  const chars = [...ln]; const ws = chars.map(c => ctx.measureText(c).width);
+  const half = lw / 2; let x = cx - half;
+  const parts = chars.map((c, i) => { const mid = x + ws[i] / 2; x += ws[i]; return { c, mid, u: (mid - cx) / Math.max(1, half) }; });
+  for (const pass of ['shadow', 'fill']) for (const p of parts) {
+    const k = 1 + (st.bulge || 0) * (1 - p.u * p.u);
+    const yy = y + st.curve * px * p.u * p.u * (nLines > 1 ? 1 : 0.6);
+    const ang = 0.6 * Math.atan(2 * st.curve * px * p.u / Math.max(1, half));
+    ctx.save(); ctx.translate(cx + (p.mid - cx) * (1 + (st.bulge || 0) * 0.5), yy); ctx.rotate(ang); ctx.scale(k, k);
+    ctx.font = fontStr(st, px); ctx.textAlign = 'center';
+    if (pass === 'shadow') { ctx.shadowOffsetX = st.shadow[0] * px; ctx.shadowOffsetY = st.shadow[1] * px; ctx.shadowBlur = st.shadow[2] * px; ctx.shadowColor = st.shadow[3]; }
+    ctx.fillStyle = fill; ctx.fillText(p.c, 0, 0);
+    ctx.restore();
+  }
+}
+// conversa de mensagem: falas separadas por "|" ou quebra de linha, alternando cinza (esquerda) e azul (direita)
+function drawBubbles(ctx, st, text, age, cx, cy, px, maxW, W, outA) {
+  const msgs = text.split(/\s*\|\s*|\n/).map(x => x.trim()).filter(Boolean);
+  ctx.font = fontStr(st, px);
+  const blocks = msgs.map((m, i) => { const lines = wrapText(ctx, m, maxW - px * 1.2); const w = Math.max(...lines.map(l => ctx.measureText(l).width)) + px * 1.2; return { lines, w, h: lines.length * px * st.lh + px * 0.75, right: i % 2 === 1 }; });
+  const gap = px * 0.5, total = blocks.reduce((a, b) => a + b.h, 0) + gap * (blocks.length - 1);
+  let y = cy - total / 2; const A = maxW / 0.72, left = cx - A / 2, right = cx + A / 2;
+  blocks.forEach((b, i) => {
+    const la = age - i * 0.9; if (la < 0) return;
+    const e = clamp(la / 0.22, 0, 1), sc = 0.6 + 0.4 * ease.back(e);
+    const x = b.right ? right - b.w : left;
+    ctx.save(); ctx.globalAlpha = outA * clamp(la / 0.08, 0, 1);
+    ctx.translate(b.right ? x + b.w : x, y + b.h); ctx.scale(sc, sc); ctx.translate(-(b.right ? x + b.w : x), -(y + b.h));
+    ctx.fillStyle = b.right ? '#0A84FF' : '#E9E9EB';
+    ctx.shadowColor = 'rgba(0,0,0,.25)'; ctx.shadowBlur = px * 0.3; ctx.shadowOffsetY = px * 0.08;
+    roundRect(ctx, x, y, b.w, b.h, px * 0.85); ctx.fill();
+    // rabinho do balão
+    ctx.beginPath();
+    if (b.right) { ctx.moveTo(x + b.w - px * 0.5, y + b.h - px * 0.55); ctx.quadraticCurveTo(x + b.w + px * 0.05, y + b.h - px * 0.1, x + b.w + px * 0.3, y + b.h); ctx.quadraticCurveTo(x + b.w - px * 0.3, y + b.h + px * 0.05, x + b.w - px * 0.75, y + b.h - px * 0.15); }
+    else { ctx.moveTo(x + px * 0.5, y + b.h - px * 0.55); ctx.quadraticCurveTo(x - px * 0.05, y + b.h - px * 0.1, x - px * 0.3, y + b.h); ctx.quadraticCurveTo(x + px * 0.3, y + b.h + px * 0.05, x + px * 0.75, y + b.h - px * 0.15); }
+    ctx.fill(); ctx.shadowColor = 'transparent';
+    ctx.fillStyle = b.right ? '#FFFFFF' : '#111111'; ctx.textAlign = 'left'; ctx.font = fontStr(st, px);
+    b.lines.forEach((l, k) => ctx.fillText(l, x + px * 0.6, y + px * 0.375 + px * st.lh * (k + 0.5)));
+    ctx.restore();
+    y += b.h + gap;
+  });
 }
 
 // Título de abertura/fechamento.
