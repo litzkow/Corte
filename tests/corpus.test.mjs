@@ -375,6 +375,21 @@ T('tira os palavrões', (s, e) => e.bleep === true, P);
 T('bipa os xingamentos', (s, e) => e.bleep === true, P);
 T('tira o texto em círculo', s => s.texts.length === 0, { prev: interpret('texto em círculo "SIGA"', base).spec, ctx: { plan } });
 
+// ===== 15. Textos na tela em alta (serifa curvada, contorno branco, papel amassado) =====
+const blk = (s, st, tx) => s.texts.some(t => t.shape === 'block' && t.style === st && (!tx || t.text === tx));
+T('coloca o texto "Dane-se o projeto verão" com serifa', s => blk(s, 'serifa', 'Dane-se o projeto verão'), P);
+T('texto na tela "27 horas de viagem" estilo papel amassado', (s, e) => blk(s, 'papel', '27 horas de viagem') && !s.target && !mixHas(s, 'travel'), P);
+T('escreve "me dá 10 minutos que eu resolvo" no vídeo', s => blk(s, 'contorno') && !s.target, P);
+T('frase "teste" com contorno branco só nos primeiros segundos', s => s.texts.some(t => t.style === 'contorno' && t.all === false), P);
+T('texto "oi" estilo edits', s => blk(s, 'contorno', 'oi'), P);
+T('put the text "road trip" in paper style', s => blk(s, 'papel', 'road trip'), P);
+T('legenda estilo papel amassado', s => s.captions.style === 'papel', P);
+T('legenda com serifa', s => s.captions.style === 'serifa', P);
+T('legenda contorno branco', s => s.captions.style === 'contorno', P);
+T('manchete "O SEGREDO" em papel amassado', s => s.headline.text === 'O SEGREDO' && s.headline.style === 'papel', P);
+T('manchete "3 erros em 30 segundos"', s => s.headline.text === '3 erros em 30 segundos' && !s.target, P);
+T('muda o texto pra serifa', s => blk(s, 'serifa', 'X'), { prev: interpret('texto na tela "X" papel', base).spec, ctx: { plan } });
+
 // ===== 9. Não deve inventar =====
 T('oi', (s, e, r) => notUnderstood(r));
 T('qual é a capital da França', (s, e, r) => notUnderstood(r));

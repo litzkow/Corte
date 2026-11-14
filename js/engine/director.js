@@ -99,6 +99,7 @@ const CAPTION_STYLE_WORDS = [
   ['minimal', /\blegendas? (simples|discretas|limpas)\b|\b(simple|clean|subtle) (captions|subtitles)\b/],
   ['bubble', /\bbalao\b|\bbubble\b/], ['typewriter', /\bmaquina de escrever\b|\btypewriter\b/],
   ['impact', /\blegendas? (fortes|de impacto|grandes)\b|\b(big|bold) (captions|subtitles)\b/],
+  ['papel', /\bpapel\b|\bpaper\b|\bcolagem\b|\brecortad/], ['serifa', /\bserif/], ['contorno', /\bcontorno branco\b|\bborda branca\b|\bwhite outline\b|\bedits\b/],
 ];
 const LANG = { portugues: 'pt', portuguese: 'pt', ingles: 'en', english: 'en', espanhol: 'es', spanish: 'es', frances: 'fr', french: 'fr' };
 
@@ -115,7 +116,8 @@ export function interpret(text, prev, ctx = {}) {
   const ctxPlan = ctx.plan || null;
   const spec = deepClone(prev || newSpec());
   spec.ops = spec.ops || []; spec.audio = spec.audio || { keepDialogue: true };
-  const sRaw = norm(text);
+  // o que está entre aspas é o texto da pessoa: não vira comando ("27 horas de viagem" não é duração)
+  const sRaw = norm(String(text).replace(/["“”]([^"“”]{1,200})["“”]/g, ' "frase" '));
   const { text: s, fixed: typos } = canon(sRaw);
   const said = [];      // o que entendi (pt-BR)
   const warn = [];      // avisos e limitações
@@ -403,9 +405,27 @@ export function interpret(text, prev, ctx = {}) {
   const quoted = [...String(text).matchAll(/["“”']([^"“”']{1,80})["“”']/g)].map(x => x[1]);
   const shapeMap = [['circle', /\b(circul\w*|circle|redond\w*|girando em volta|em volta d[oa] (rosto|cabeca|pessoa)|around (the |my )?(face|head))/], ['arc', /\b(arco|arc|curv|curved)/], ['wave', /\b(onda|wave|ondulad|wavy)/], ['badge', /\b(selo|badge|sticker|adesivo|carimbo|stamp)/], ['spiral', /\b(espiral|spiral)/]];
   const quotedTxt = [...String(text).matchAll(/["“”']([^"“”']{1,80})["“”']/g)].map(x => x[1]);
+  // --- texto na tela em bloco: serifa curvada, contorno branco, papel amassado ---
+  const BLOCK_WORDS = [['papel', /\b(papel( amassado)?|amassad\w*|recortad\w*|recorte de papel|colagem|paper|crumpled|sticker de papel)\b/], ['serifa', /\b(serif\w*|editorial|letra de revista|letra fina e chique)\b/], ['contorno', /\b(contorno branco|borda branca|white outline|(do |estilo |tipo )(o )?edits|outline branco|sticker branco|contorno preto e branco)\b/]];
+  const bw = BLOCK_WORDS.find(([, re]) => re.test(s));
+  const blockAsk = /\b(texto|frase|escrita|escreve|escrever|escreva|letreiro|text|write)\b.{0,30}\b(na tela|no video|no meio|em cima do video|on screen|por cima)\b|\b(texto na tela|frase na tela|texto no meio)\b/.test(s);
+  const isCaption = /\blegenda\b/.test(s) && !/\b(texto|frase)\b/.test(s);
+  if ((bw || blockAsk) && !isCaption && !/\bmanchete\b/.test(s)) {
+    const style = bw ? bw[0] : 'contorno';
+    const label = { serifa: 'serifa curvada', contorno: 'contorno branco', papel: 'papel amassado' }[style];
+    const all = !/\b(primeiros (\d+ )?segundos|so no comeco|so no inicio|no comecinho|first seconds)\b/.test(s);
+    if (quotedTxt.length) { spec.texts.push({ shape: 'block', style, text: quotedTxt[0], all }); said.push(`Texto na tela em ${label}: "${quotedTxt[0]}"${all ? '' : ' (primeiros segundos)'}`); }
+    else {
+      const blk = spec.texts.filter(t => t.shape === 'block');
+      if (blk.length && bw) { blk.forEach(t => { t.style = style; }); said.push(`Texto na tela agora em ${label}`); }
+      else if (spec.headline && bw) { spec.headline.style = style; said.push(`Manchete em ${label}`); }
+      else ask.push(`Qual frase vai na tela em ${label}? Escreva entre aspas, por exemplo: texto na tela "27 horas de viagem" em ${label}.`);
+    }
+  }
+  if (/\bmanchete\b/.test(s) && bw) { if (spec.headline) { spec.headline.style = bw[0]; } spec._headlineStyle = bw[0]; }
   if (/\b(tira|tire|remove|remova|sem|apaga|apague|exclui|delete|no)\b.{0,20}\b(texto|textos|selo|adesivo|sticker|badge|escrita|carimbo|letreiro)\b/.test(s) && !quotedTxt.length) {
     if (spec.texts.length) { spec.texts = []; said.push('Sem texto com forma'); } else if (/\btitulo\b/.test(s) && spec.title) { spec.title = null; said.push('Sem título'); } else said.push('Sem textos extras');
-  } else for (const [shape, re] of shapeMap) {
+  } else if (!((bw || blockAsk) && !isCaption && !/\bmanchete\b/.test(s))) for (const [shape, re] of shapeMap) {
     if (re.test(s) && (/\b(texto|text|escrita|escrito|frase|palavra|letreiro|titulo|title|legenda)/.test(s) || (quotedTxt.length && /\b(coloca|poe|bota|adiciona|insere|add|put|um|uma)\b/.test(s)))) {
       const txt = quoted[0] || (spec.title || '');
       const follow = /\b(em volta d[oa] (rosto|cabeca|pessoa)|around (the |my |his |her )?(face|head|person)|seguindo a pessoa|follow)/.test(s);
@@ -453,6 +473,7 @@ export function interpret(text, prev, ctx = {}) {
     ask.push(`Não entendi "${String(text).trim().slice(0, 80)}".` + (suggestions.length ? ' Você quis dizer algo assim?' : ' Tente com outras palavras, por exemplo "corta mais rápido" ou "legenda palavra por palavra".'));
   }
   spec.history = [...(prev && prev.history || []), text].slice(-50);
+  delete spec._headlineStyle;
   const exportNow = !!spec._export, reroll = !!spec._reroll, useRef = !!spec._useRef;
   delete spec._export; delete spec._reroll; delete spec._useRef;
   return { spec, said, warn, ask, followUp: isFollowUp, suggestions, exportNow, reroll, useRef };
@@ -621,7 +642,7 @@ function extraRules({ s, text, spec, prev, ctx, said, warn, ask, set, changed, s
     if (neg('manchete')) { spec.headline = null; said.push('Sem manchete'); }
     else {
       const txt = quoted.find(q => !spec.texts.some(t => t.text === q)) || (spec.headline && spec.headline.text);
-      if (txt) { spec.headline = { text: txt, all: /\b(video (todo|inteiro)|o tempo todo|sempre|whole video|all the time)\b/.test(s), style: /\b(sem caixa|grande|bold|contorno)\b/.test(s) ? 'bold' : 'box' }; if (spec.title === txt) spec.title = null; said.push(`Manchete no topo: "${txt}"${spec.headline.all ? ' (o vídeo todo)' : ' (primeiros segundos)'}`); }
+      if (txt) { spec.headline = { text: txt, all: /\b(video (todo|inteiro)|o tempo todo|sempre|whole video|all the time)\b/.test(s), style: spec._headlineStyle || (/\b(sem caixa|grande|bold|contorno)\b/.test(s) ? 'bold' : 'box') }; if (spec.title === txt) spec.title = null; said.push(`Manchete no topo: "${txt}"${spec.headline.all ? ' (o vídeo todo)' : ' (primeiros segundos)'}`); }
       else ask.push('Qual frase vai na manchete? Escreva entre aspas, por exemplo: manchete "3 erros que você comete".');
     }
   }

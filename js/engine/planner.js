@@ -534,6 +534,13 @@ export function buildPlan({ spec, items, music, outputIndex = 0, seed = 1, trans
   if (spec.headline && spec.headline.text) overlays.push({ id: uid('t'), kind: 'headline', text: spec.headline.text, start: 0, dur: spec.headline.all ? total : Math.min(total, spec.headline.seconds || 4), style: spec.headline.style || 'box' });
   if (E.progressBar) overlays.push({ id: uid('t'), kind: 'progress', start: 0, dur: total, color: E.progressColor || '#FFB547', pos: E.progressPos || 'top' });
   for (const tx of spec.texts || []) {
+    if (tx.shape === 'block') {
+      // frase em bloco (serifa curvada, contorno branco, papel amassado)
+      const st = tx.from != null ? clamp(tx.from, 0, total - 0.5) : 0;
+      overlays.push({ id: uid('t'), kind: 'block', style: tx.style || 'contorno', text: tx.text, color: tx.color || null, y: tx.y != null ? tx.y : null, start: st, dur: tx.all === false ? Math.min(total - st, tx.dur || 4) : total - st });
+      decisions.push(`Texto na tela (${tx.style || 'contorno'}): "${tx.text}"${tx.all === false ? ' nos primeiros segundos' : ' o vídeo todo'}.`);
+      continue;
+    }
     const round = tx.shape === 'circle' || tx.shape === 'badge';
     // círculo e selo: no canto de cima (fora do rosto), a não ser que peça em volta da pessoa
     const pos = tx.follow ? { x: 0.5, y: 0.4, size: 1.45 } : round ? { x: 0.74, y: 0.2, size: 0.75 } : tx.shape === 'arc' ? { x: 0.5, y: 0.2, size: 1 } : { x: 0.5, y: 0.3, size: 1 };

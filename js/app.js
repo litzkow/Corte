@@ -7,7 +7,7 @@ import { buildPlan } from './engine/planner.js';
 import { Renderer, visualSegments } from './engine/render.js';
 import { PRESETS, LOOKS } from './engine/styles.js';
 import { PLATFORMS } from './engine/platforms.js';
-import { CAPTION_STYLES, SHAPES, drawCaption, groupWords, markEmphasis, drawShape, ensureFonts, FONTS, googleFontsHref } from './engine/captions.js';
+import { CAPTION_STYLES, SHAPES, TEXT_STYLES, drawTextBlock, drawCaption, groupWords, markEmphasis, drawShape, ensureFonts, FONTS, googleFontsHref } from './engine/captions.js';
 import { alignScript, whisperTranscribe } from './engine/transcribe.js';
 import { checkPlan, checkExport, CAT_LABEL } from './engine/qc.js';
 import { dropAudioCache } from './engine/audio-mix.js';
@@ -17,7 +17,7 @@ import { uid, deepClone, clamp, sleep } from './engine/util.js';
 import { icon } from './icons.js';
 import * as store from './store.js';
 
-export const APP_VERSION = '2.1', APP_DATE = '14/11/2026';
+export const APP_VERSION = '2.2', APP_DATE = '14/11/2026';
 
 const $ = s => document.querySelector(s);
 const el = (tag, attrs = {}, ...kids) => { const e = document.createElement(tag); for (const [k, v] of Object.entries(attrs)) { if (k === 'class') e.className = v; else if (k === 'html') e.innerHTML = v; else if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else if (v === true) e.setAttribute(k, ''); else if (v !== false && v != null) e.setAttribute(k, v); } for (const k of kids.flat()) if (k != null) e.append(k.nodeType ? k : document.createTextNode(String(k))); return e; };
@@ -86,6 +86,7 @@ function paintSample(c, t, kind, id, extra = {}) {
   const area = { x: W * 0.06, y: H * 0.1, w: W * 0.88, h: H * 0.75 };
   if (kind === 'style') { const cs = PRESETS[id].captions.style; drawCaption(ctx, groupWords(markEmphasis(SAMPLE), cs), t, cs, area, H * 0.62, {}); }
   else if (kind === 'cap') drawCaption(ctx, groupWords(markEmphasis(SAMPLE), id), t, id, area, H * 0.66, {});
+  else if (kind === 'block') drawTextBlock(ctx, { text: extra.text || ({ serifa: 'Agora a meta é ficar forte', contorno: 'Me dá 10 minutos que eu resolvo', papel: '27 horas de viagem' })[id], style: id, start: 0, dur: 99, y: 0.42 }, t + 0.8, W, H, area);
   else if (kind === 'shape') drawShape(ctx, { shape: id, text: extra.text || 'SIGA PARA MAIS', x: 0.5, y: id === 'arc' ? 0.22 : 0.42, size: 1, start: 0, dur: 99, color: extra.color || '#FFFFFF', accent: '#FFE81F' }, t + 0.6, W, H, null);
 }
 function animCanvases(selector) {
@@ -573,15 +574,25 @@ function textSheet() {
   txt.addEventListener('input', upd);
   const sw = el('div', { class: 'swatches' }, ...['#FFFFFF', '#FFE81F', '#111111', '#FF2BD6', '#3DFF6E', '#4DD9FF'].map(c => el('button', { style: `background:${c}`, 'aria-label': 'Cor ' + c, onclick: e => { color = c; [...sw.children].forEach(b => b.classList.toggle('on', b === e.currentTarget)); upd(); } })));
   const head = el('input', { type: 'text', value: (sp.headline && sp.headline.text) || '', placeholder: 'Ex.: 3 erros que todo mundo comete', 'aria-label': 'Manchete' });
-  openSheet('Texto', 'Manchete no topo, textos com forma e barra de progresso.',
+  // texto na tela: frase em bloco nos estilos em alta
+  let bstyle = 'serifa', ball = true;
+  const btxt = el('textarea', { rows: '2', maxlength: '160', placeholder: 'Ex.: Dane-se o projeto verão. Agora a meta é ficar forte', 'aria-label': 'Frase do texto na tela' });
+  const bg = el('div', { class: 'gal' });
+  const bupd = () => { [...bg.children].forEach(b => b.classList.toggle('on', b.dataset.id === bstyle)); bg.querySelectorAll('canvas').forEach(c => { if (btxt.value.trim()) c.dataset.text = btxt.value.trim(); else delete c.dataset.text; }); };
+  for (const [id, st] of Object.entries(TEXT_STYLES)) bg.append(galBtn('block', id, st.label, st.desc, false, () => { bstyle = id; bupd(); }));
+  btxt.addEventListener('input', bupd);
+  const bwhen = el('div', { class: 'chips' }, ...[['O vídeo todo', true], ['Primeiros segundos', false]].map(([l, v], i) => el('button', { class: 'chip' + (i === 0 ? ' on' : ''), onclick: e => { ball = v; [...bwhen.children].forEach(b => b.classList.toggle('on', b === e.currentTarget)); } }, l)));
+  openSheet('Texto', 'Frase na tela nos estilos em alta, manchete, textos com forma e barra de progresso.',
+    label('Texto na tela'), el('div', { class: 'field' }, btxt), bg, bwhen,
+    el('button', { class: 'btn primary wide', style: 'margin-top:12px', onclick: () => { const tx = btxt.value.trim(); if (!tx) return toast('Escreva a frase primeiro.'); closeSheet(); changeSpec(s => { s.texts = [...(s.texts || []), { shape: 'block', style: bstyle, text: tx, all: ball }]; }, 'Texto: ' + TEXT_STYLES[bstyle].label); } }, 'Colocar no vídeo'),
     label('Manchete no topo'), el('div', { class: 'field' }, head),
     el('div', { style: 'display:flex;gap:8px' }, el('button', { class: 'btn primary', onclick: () => { closeSheet(); changeSpec(s => { s.headline = head.value.trim() ? { text: head.value.trim(), all: false, style: 'box' } : null; }, head.value.trim() ? 'Manchete' : 'Sem manchete'); } }, 'Primeiros segundos'),
       el('button', { class: 'btn', onclick: () => { closeSheet(); changeSpec(s => { s.headline = head.value.trim() ? { text: head.value.trim(), all: true, style: 'box' } : null; }, 'Manchete o vídeo todo'); } }, 'O vídeo todo')),
     switchRow('Barra de progresso', resolveStyle(sp).progressBar, on => { closeSheet(); changeSpec(s => { s.over.progressBar = on; }, on ? 'Barra de progresso' : 'Sem barra'); }),
     label('Texto com forma'), el('div', { class: 'field' }, txt), sw, follow, g,
     el('button', { class: 'btn primary wide', style: 'margin-top:12px', onclick: () => { const item = { shape, text: (txt.value || 'SIGA PARA MAIS').trim(), follow: follow.querySelector('input').checked, color }; closeSheet(); changeSpec(s => { s.texts = [...(s.texts || []), item]; }, 'Texto: ' + SHAPES[shape].label); } }, 'Adicionar texto com forma'),
-    (sp.texts || []).length ? [label('Textos no vídeo (toque para tirar)'), el('div', { class: 'chips' }, ...sp.texts.map((t, i) => el('button', { class: 'chip on', onclick: () => { closeSheet(); changeSpec(s => { s.texts.splice(i, 1); }, 'Texto removido'); } }, `${SHAPES[t.shape].label}: ${t.text} ×`)))] : null);
-  upd();
+    (sp.texts || []).length ? [label('Textos no vídeo (toque para tirar)'), el('div', { class: 'chips' }, ...sp.texts.map((t, i) => el('button', { class: 'chip on', onclick: () => { closeSheet(); changeSpec(s => { s.texts.splice(i, 1); }, 'Texto removido'); } }, `${t.shape === 'block' ? (TEXT_STYLES[t.style] || TEXT_STYLES.contorno).label : SHAPES[t.shape].label}: ${t.text.slice(0, 40)} ×`)))] : null);
+  upd(); bupd();
 }
 // Áudio
 function audioSheet() {

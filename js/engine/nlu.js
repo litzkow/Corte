@@ -48,7 +48,7 @@ const SYN = [
   [/\b(ta|esta|ficou|is|its)\s+(muito\s+|mt\s+|bem\s+|too\s+)?(lento|parado|arrastado|chato|devagar|slow|boring|draggy)\b/g, ' mais rapido '],
   // legenda
   [/\b(legendinha|legendinhas|subtitulo|subtitulos|letreiro da fala|texto da fala|escrita da fala|closed captions?|cc|subs|subtitles?|captions?)\b/g, ' legenda '],
-  [/\b(texto|textos|escrita|escritas|letras|letra)\s+(que aparece|aparecendo|na tela|no video|on screen)\b/g, ' legenda '],
+  [/\b(texto|textos|escrita|escritas|letras|letra)\s+(que aparece|aparecendo|da fala|do que (eu )?falo)\b/g, ' legenda '],
   // música
   [/\b(trilha sonora|som de fundo|musica de fundo|musiquinha|fundo musical|background music|bgm|soundtrack|the song|the track|o som de fundo|a batida|o beat)\b/g, ' musica '],
   [/\b(nao (da|consigo|consegue) (pra |para )?(ouvir|entender) (a |o )?(voz|fala|que (eu|ele|ela) (fala|diz)))|(cant|can't|cannot) hear (the |my )?(voice|speech|talking)/g, ' musica mais baixa e voz mais alta '],
