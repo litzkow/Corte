@@ -106,6 +106,41 @@ export async function analyzeImage(src) {
   return { step: src.duration, duration: src.duration, cuts: [], shots: [shot], samples: [{ t: 0, mean: s.mean, motion: 0, sat: s.sat, cx: s.cx, cy: s.cy, skin: s.skin }], still: true };
 }
 
+// Toca o vídeo (mudo, acelerado) e chama onFrame(t) a cada dt segundos de vídeo. Devolve até onde chegou.
+function scanByPlayback(v, dur, dt, onFrame) {
+  if (typeof v.requestVideoFrameCallback !== 'function') return Promise.resolve(0);
+  return new Promise(resolve => {
+    // precisa estar na página para o navegador decodificar e mostrar quadros (invisível para a pessoa)
+    Object.assign(v.style, { position: 'fixed', left: '0', top: '0', width: '4px', height: '4px', opacity: '0.01', pointerEvents: 'none', zIndex: '-1' });
+    document.body.appendChild(v);
+    let next = 0, rate = 4, late = 0, onTime = 0, lastFrame = performance.now(), done = false, started = false;
+    const finish = () => {
+      if (done) return; done = true; clearInterval(dog); v.onended = null;
+      try { v.pause(); v.playbackRate = 1; } catch (e) {}
+      v.remove(); if (window.__scanDebug) console.log("scan", next.toFixed(2), "rate", rate, "late", late); resolve(next);
+    };
+    const onVF = (now, meta) => {
+      if (done) return;
+      const mt = meta.mediaTime; lastFrame = performance.now(); started = true;
+      if (mt + 1e-3 >= next) {
+        onFrame(mt);
+        // atrasado demais = o aparelho não acompanha essa velocidade: desacelera; folgado: acelera
+        if (mt - next > dt * 0.6) { late++; onTime = 0; if (late >= 3 && rate > 1) { rate = Math.max(1, rate / 1.5); v.playbackRate = rate; late = 0; } }
+        else if (++onTime > 40 && rate < 8) { rate = Math.min(8, rate * 1.25); v.playbackRate = rate; onTime = 0; }
+        while (next <= mt + 1e-3) next += dt;
+      }
+      if (next >= dur - 0.02) finish(); else v.requestVideoFrameCallback(onVF);
+    };
+    // vigia: sem quadro novo por alguns segundos, desiste e deixa o resto para a busca
+    const dog = setInterval(() => { if (performance.now() - lastFrame > (started ? 4000 : 6000)) finish(); }, 500);
+    v.onended = () => setTimeout(finish, 50);
+    v.muted = true; v.currentTime = 0;
+    v.requestVideoFrameCallback(onVF);
+    v.playbackRate = rate;
+    const pr = v.play(); if (pr && pr.catch) pr.catch(() => finish());
+  });
+}
+
 export async function analyzeVideo(src, opts = {}) {
   const seeker = await makeSeeker(src);
   try { return await analyzeVideoWith(seeker, src, opts); }
@@ -123,13 +158,13 @@ async function analyzeVideoWith(seeker, src, { onProgress, step } = {}) {
   const samples = [];
   let prev = null;
   const grab = async t => { await seeker.seek(t); ctx.drawImage(seeker.el, 0, 0, SW, SH); };
-  for (let t = 0; t < dur - 0.02; t += dt) {
-    await grab(t);
-    const s = stats(ctx, prev ? prev.gray : null);
-    s.t = seeker.el.currentTime;
-    samples.push(s); prev = s;
-    onProgress && onProgress(Math.min(1, t / dur));
-  }
+  const take = t => { const s = stats(ctx, prev ? prev.gray : null); s.t = t; samples.push(s); prev = s; onProgress && onProgress(Math.min(1, t / dur)); };
+  // 1) rápido: toca o vídeo mudo acelerado e pega os quadros enquanto passam (buscar quadro a quadro
+  //    obriga o aparelho a decodificar desde o último quadro-chave a cada amostra: era 10x mais lento).
+  let from = 0;
+  try { from = await scanByPlayback(seeker.el, dur, dt, t => { ctx.drawImage(seeker.el, 0, 0, SW, SH); take(t); }); } catch (e) { from = samples.length ? samples[samples.length - 1].t + dt : 0; }
+  // 2) o que faltou (navegador sem suporte, vídeo travou no meio): busca por busca, como antes
+  for (let t = from; t < dur - 0.02; t += dt) { await grab(t); take(seeker.el.currentTime); }
   // --- trocas de cena ---
   const d = samples.map((s, i) => i ? histDist(samples[i - 1].hist, s.hist) * 0.7 + Math.min(1, s.motion * 3) * 0.3 : 0);
   const base = movingAvg(d, 9);

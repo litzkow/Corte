@@ -1,5 +1,6 @@
 // Carregar arquivos de mídia, ler metadados e decodificar áudio.
 import { uid } from './util.js';
+import { extractAacAdts } from './mp4audio.js';
 
 export const LIMITS = {
   // Acima disso o aparelho provavelmente não aguenta decodificar o áudio inteiro na memória.
@@ -67,6 +68,10 @@ async function getBytes(src) {
 // Decodifica o áudio para uma taxa e número de canais; devolve AudioBuffer ou null se não houver áudio.
 export async function decodeAudio(src, sampleRate = 16000, channels = 1) {
   if (src.kind === 'image') return null;
+  // MP4/MOV grande (vídeo de celular): lê só a trilha de som, sem pôr o arquivo inteiro na memória (era o que fechava o app)
+  if (src.file && src.file.size > 80e6 && /\.(mp4|mov|m4v|m4a)$/i.test(src.name || '') && !decodeAudio.noFast) {
+    try { const b = await decodeAacTrack(src, sampleRate, channels); if (b) return b; } catch (e) { console.warn('trilha de som rápida falhou, usando o caminho completo', e); }
+  }
   const bytes = await getBytes(src);
   const frames = Math.max(1, Math.ceil(src.duration * sampleRate));
   const ctx = new OfflineAudioContext(channels, frames, sampleRate);
@@ -75,6 +80,19 @@ export async function decodeAudio(src, sampleRate = 16000, channels = 1) {
   } catch (e) {
     return null; // vídeo sem trilha de áudio
   }
+}
+
+async function decodeAacTrack(src, sampleRate, channels) {
+  const x = await extractAacAdts(src.file); if (!x) return null;
+  const want = Math.max(1, Math.ceil(src.duration * sampleRate));
+  const ctx = new OfflineAudioContext(channels, want + Math.ceil((x.skipSeconds + 1) * sampleRate), sampleRate);
+  const buf = await ctx.decodeAudioData(x.bytes);
+  const skip = Math.round(x.skipSeconds * sampleRate);
+  // confere: o som precisa ter quase a mesma duração do vídeo
+  if (Math.abs((buf.length - skip) / sampleRate - src.duration) > 1.0) return null;
+  const out = ctx.createBuffer(buf.numberOfChannels, Math.min(want, buf.length - skip), sampleRate);
+  for (let c = 0; c < buf.numberOfChannels; c++) out.getChannelData(c).set(buf.getChannelData(c).subarray(skip, skip + out.length));
+  return out;
 }
 
 export function mixToMono(buf) {

@@ -13,7 +13,7 @@ import { Compositor } from './engine/gl.js';
 import { PRESETS, LOOKS } from './engine/styles.js';
 import { PLATFORMS } from './engine/platforms.js';
 import { CAPTION_STYLES, SHAPES, TEXT_STYLES, drawTextBlock, drawCaption, groupWords, markEmphasis, drawShape, ensureFonts, FONTS, googleFontsHref } from './engine/captions.js';
-import { alignScript, whisperTranscribe } from './engine/transcribe.js';
+import { alignScript, whisperTranscribe, whisperText } from './engine/transcribe.js';
 import { checkPlan, checkExport, CAT_LABEL } from './engine/qc.js';
 import { dropAudioCache } from './engine/audio-mix.js';
 import { referenceProfile, applyReference } from './engine/reference.js';
@@ -22,7 +22,7 @@ import { uid, deepClone, clamp, sleep } from './engine/util.js';
 import { icon } from './icons.js';
 import * as store from './store.js';
 
-export const APP_VERSION = '2.5', APP_DATE = '14/11/2026';
+export const APP_VERSION = '2.6', APP_DATE = '17/11/2026';
 
 const $ = s => document.querySelector(s);
 const el = (tag, attrs = {}, ...kids) => { const e = document.createElement(tag); for (const [k, v] of Object.entries(attrs)) { if (k === 'class') e.className = v; else if (k === 'html') e.innerHTML = v; else if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else if (v === true) e.setAttribute(k, ''); else if (v !== false && v != null) e.setAttribute(k, v); } for (const k of kids.flat()) if (k != null) e.append(k.nodeType ? k : document.createTextNode(String(k))); return e; };
@@ -30,7 +30,7 @@ const tc = (t, dec = true) => { t = Math.max(0, t || 0); const m = Math.floor(t 
 document.head.append(el('link', { rel: 'stylesheet', href: googleFontsHref() }));
 
 // ---------------- estado ----------------
-const prefs = Object.assign({ format: 'reels', voiceLang: 'pt-BR' }, store.loadPrefs());
+const prefs = Object.assign({ format: 'reels', voiceLang: 'pt-BR', voiceEngine: 'auto' }, store.loadPrefs());
 const S = {
   project: null, sources: [], music: null, musicA: null, ref: null, refPending: false, items: new Map(),
   versions: [], cur: -1, transcript: {}, pendingStyle: null,
@@ -144,8 +144,10 @@ async function thumbOf(src) {
 async function addFiles(files, { role } = {}) {
   if (!S.project) newProject();
   if ($('#editor').hidden) openEditor();
-  let added = 0;
+  let added = 0, k = 0;
+  if (files.length > 1) toast(`Abrindo ${files.length} arquivos…`, 2500);
   for (const f of files) {
+    k++;
     const errs = validateFile(f);
     if (errs.length) { toast(errs[0], 4500); continue; }
     try {
@@ -160,6 +162,7 @@ async function addFiles(files, { role } = {}) {
         else { src.role = 'music'; setMusic(src); toast(`"${src.name}" virou a música.`); }
       } else { src.role = 'footage'; S.sources.push(src); }
       store.saveFile(src.id, f); added++;
+      renderAll();   // cada arquivo aparece assim que abre, sem esperar os outros
     } catch (e) { toast(`Não consegui abrir "${f.name}": ${e.message}`, 5000); }
   }
   renderAll(); autosave();
@@ -203,7 +206,7 @@ async function analyzeAll(onStage) {
 function setBusy(on, list) {
   S.busy = on;
   $('#busy').hidden = !on;
-  for (const id of ['#btnExport', '#btnSend']) $(id).disabled = on;
+  $('#btnExport').disabled = on;   // enviar continua ligado: pedido feito durante o trabalho entra na fila
   if (on && list) { const ol = $('#stages'); ol.innerHTML = ''; for (const [k, l] of list) ol.append(el('li', { id: 'st_' + k }, el('span', {}, l), el('span', {}))); }
   if (!on) renderAll();
 }
@@ -524,7 +527,7 @@ function aiSheet() {
   }
   const ta = el('textarea', { placeholder: 'Escreva o pedido…', rows: '3', 'aria-label': 'Pedido' });
   const mic = el('button', { class: 'ai-mic', 'aria-label': 'Falar', html: '<span class="ring"></span>' + icon('mic', 20) });
-  setupMic(mic, ta, false);
+  setupMic(mic, ta, t => { closeSheet(); runEdit(t); });
   const go = el('button', { class: 'btn primary', onclick: () => { const t = ta.value.trim(); closeSheet(); runEdit(t); } }, curV() ? 'Ajustar' : 'Editar com IA');
   const cards = el('div', { class: 'gal' }, ...Object.entries(PRESETS).map(([id, p]) => galBtn('style', id, p.label, p.desc, curV() && curV().spec.mix.length === 1 && curV().spec.mix[0].id === id, () => pickStyle(id))));
   openSheet('Editar com IA', 'Fale ou escreva. Ela entende português e inglês, com gíria e erro de digitação.', log,
@@ -849,6 +852,8 @@ function settingsSheet() {
   const styles = store.loadStyles();
   openSheet('Ajustes', null,
     label('Idioma da voz'), el('div', { class: 'chips' }, ...[['pt-BR', 'Português'], ['en-US', 'Inglês']].map(([k, l]) => el('button', { class: 'chip' + (prefs.voiceLang === k ? ' on' : ''), onclick: () => { prefs.voiceLang = k; store.savePrefs(prefs); settingsSheet(); } }, l))),
+    label('Microfone'), el('div', { class: 'chips' }, ...[['auto', 'Ao vivo (do navegador)'], ['record', 'Gravar e transcrever no aparelho']].map(([k, l]) => el('button', { class: 'chip' + (prefs.voiceEngine === k ? ' on' : ''), onclick: () => { prefs.voiceEngine = k; store.savePrefs(prefs); settingsSheet(); } }, l))),
+    el('p', { class: 'muted' }, 'Ao vivo mostra o texto enquanto você fala. Se ele cortar ou não entender, use "Gravar e transcrever": grava tudo e transcreve aqui mesmo (na primeira vez baixa o reconhecimento, uns 75 MB).'),
     label('Meus estilos (toque para apagar)'), styles.length ? el('div', { class: 'chips' }, ...styles.map(s => el('button', { class: 'chip', onclick: () => { store.saveStyles(store.loadStyles().filter(x => x.name !== s.name)); settingsSheet(); } }, s.name + ' ×'))) : el('p', { class: 'muted' }, 'Depois de gostar de um resultado, diga "salva esse estilo".'),
     label('Comandos que você ensinou (toque para apagar)'), loadTaught().length ? el('div', { class: 'list' }, ...loadTaught().map(t => el('button', { class: 'row', onclick: () => { forgetTaught(t.phrase); settingsSheet(); } }, el('b', {}, `"${t.phrase}"`), el('span', { class: 'muted' }, ' → ' + t.meaning + ' ×')))) : el('p', { class: 'muted' }, 'Diga, por exemplo: quando eu disser "explosivo" quer dizer cortes bem rápidos, tremor, flashes e música épica.'),
     el('button', { class: 'btn wide', style: 'margin-top:10px', onclick: diagnosticsSheet }, 'Centro de diagnóstico'),
@@ -862,19 +867,167 @@ function settingsSheet() {
       el('li', {}, 'Efeitos sonoros são gerados por código, sem direitos autorais. Música de artista pode ser silenciada pelas redes.')));
 }
 
-// voz
-let rec = null;
-function setupMic(btn, target, autoSend = true) {
+// voz — painel igual ao de um app de conversa: fica ouvindo até você mandar parar ou enviar.
+// Dois motores: (1) reconhecimento do navegador, ao vivo; reinicia sozinho quando o navegador para no meio
+// (Safari e Chrome do celular param a cada pausa). (2) gravar e transcrever no aparelho (Whisper), usado quando
+// o navegador não tem reconhecimento ou ele falha (ex.: app na Tela de Início do iPhone).
+const SRclass = () => window.SpeechRecognition || window.webkitSpeechRecognition;
+const isAndroid = /Android/i.test(navigator.userAgent);
+const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
+const isStandalone = () => navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+const V = { on: false, mode: null, committed: '', fin: '', mid: '', t0: 0, tick: null, rec: null, mr: null, chunks: [], stream: null, actx: null, raf: 0, recT0: 0, recSecs: 0, onDone: null, stopping: null, fastEnds: 0, lastStart: 0, working: false };
+const joinTxt = (...p) => p.map(x => (x || '').trim()).filter(Boolean).join(' ');
+function voiceEl() {
+  let w = $('#voice'); if (w) return w;
+  w = el('div', { class: 'voice', id: 'voice', role: 'dialog', 'aria-label': 'Falando o pedido', hidden: '' },
+    el('div', { class: 'v-head' }, el('span', { class: 'v-dot' }), el('span', { class: 'v-status' }, 'Ouvindo…'), el('span', { class: 'v-time' }, '0:00')),
+    el('div', { class: 'v-text' }, el('span', { class: 'v-fin' }), el('span', { class: 'v-mid' }), el('span', { class: 'v-hint' }, 'Pode falar à vontade. Só paro quando você tocar em Parar ou Enviar.')),
+    el('canvas', { class: 'v-wave', width: '600', height: '64' }),
+    el('div', { class: 'v-btns' },
+      el('button', { class: 'v-btn', 'aria-label': 'Cancelar', onclick: () => voiceClose('cancel') }, el('span', { class: 'v-ico', html: icon('close', 22) }), el('span', {}, 'Cancelar')),
+      el('button', { class: 'v-btn v-stop', 'aria-label': 'Parar e revisar', onclick: () => voiceClose('stop') }, el('span', { class: 'v-ico' }, el('i', { class: 'sq' })), el('span', {}, 'Parar')),
+      el('button', { class: 'v-btn v-send', 'aria-label': 'Enviar', onclick: () => voiceClose('send') }, el('span', { class: 'v-ico', html: icon('send', 22) }), el('span', {}, 'Enviar'))));
+  document.body.append(w); return w;
+}
+function voicePaint(status) {
+  const w = voiceEl();
+  if (status) w.querySelector('.v-status').textContent = status;
+  const fin = joinTxt(V.committed, V.fin), mid = V.mid.trim();
+  w.querySelector('.v-fin').textContent = fin + (fin && mid ? ' ' : '');
+  w.querySelector('.v-mid').textContent = mid;
+  w.querySelector('.v-hint').hidden = !!(fin || mid);
+  w.classList.toggle('rec', V.mode === 'record');
+  w.classList.toggle('working', V.working);
+  const tx = w.querySelector('.v-text'); tx.scrollTop = tx.scrollHeight;
+}
+function voiceOpen(onDone) {
+  if (V.on) return;
+  Object.assign(V, { on: true, committed: '', fin: '', mid: '', onDone, t0: Date.now(), fastEnds: 0, working: false, chunks: [], recSecs: 0 });
+  const w = voiceEl(); w.hidden = false; w.querySelector('.v-time').textContent = '0:00';
+  clearInterval(V.tick); V.tick = setInterval(() => { const s = Math.floor((Date.now() - V.t0) / 1000); w.querySelector('.v-time').textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }, 500);
+  const useRecord = prefs.voiceEngine === 'record' || !SRclass() || (isIOS && isStandalone());
+  if (useRecord) recordStart(); else liveStart();
+}
+// --- motor 1: reconhecimento ao vivo ---
+function liveStart() {
+  V.mode = 'live'; voicePaint('Ouvindo…');
+  const SR = SRclass(); let r;
+  try { r = new SR(); } catch (e) { return recordStart('O reconhecimento do navegador não abriu. Gravando para transcrever aqui.'); }
+  V.rec = r; r.lang = prefs.voiceLang; r.interimResults = true; r.maxAlternatives = 1;
+  r.continuous = !isAndroid;   // no Android o modo contínuo repete frases; lá cada frase é uma sessão
+  r.onresult = e => {
+    if (V.rec !== r) return;
+    let f = '', m = '';
+    for (let i = 0; i < e.results.length; i++) { const x = e.results[i]; if (x.isFinal) f += x[0].transcript + ' '; else m += x[0].transcript + ' '; }
+    V.fin = f; V.mid = m; V.fastEnds = 0; voicePaint();
+  };
+  r.onerror = e => {
+    if (V.rec !== r) return;
+    const er = e.error;
+    if (er === 'no-speech' || er === 'aborted') return;   // silêncio: só reinicia
+    if (er === 'not-allowed' && Date.now() - V.t0 < 1500) { V.rec = null; voiceClose('cancel'); toast('Permita o microfone para o site nas configurações do Safari/Chrome.', 5000); return; }
+    // serviço indisponível, sem internet, sem permissão para reiniciar sozinho: grava e transcreve aqui
+    V.rec = null; commitLive(); try { r.abort(); } catch (x) {}
+    recordStart(er === 'network' ? 'O reconhecimento do navegador precisa de internet. Gravando para transcrever no aparelho.' : 'O reconhecimento do navegador falhou. Continuo gravando e transcrevo no aparelho.');
+  };
+  r.onend = () => {
+    if (V.rec !== r) return;
+    V.rec = null; commitLive();
+    if (V.stopping) { V.stopping(); return; }
+    if (!V.on || V.mode !== 'live') return;
+    // o navegador parou sozinho (pausa na fala): volta a ouvir sem a pessoa perceber
+    if (Date.now() - V.lastStart < 1200) V.fastEnds++;
+    if (V.fastEnds >= 6) return recordStart('O navegador fica parando de ouvir. Gravando para transcrever no aparelho.');
+    setTimeout(() => { if (V.on && V.mode === 'live' && !V.rec) liveStart(); }, 150);
+  };
+  try { V.lastStart = Date.now(); r.start(); } catch (e) { V.rec = null; setTimeout(() => { if (V.on && V.mode === 'live' && !V.rec) liveStart(); }, 400); }
+}
+function commitLive() { V.committed = joinTxt(V.committed, V.fin, V.mid); V.fin = ''; V.mid = ''; voicePaint(); }
+function liveStop() {
+  return new Promise(res => {
+    const r = V.rec; if (!r) { res(); return; }
+    const done = () => { clearTimeout(t); V.stopping = null; if (V.rec === r) { V.rec = null; commitLive(); } try { r.abort(); } catch (e) {} res(); };
+    const t = setTimeout(done, 1500);   // Safari às vezes não avisa que parou
+    V.stopping = done;
+    try { r.stop(); } catch (e) { done(); }
+  });
+}
+// --- motor 2: gravar e transcrever no aparelho ---
+async function recordStart(note) {
+  V.mode = 'record'; V.working = false; voicePaint('Gravando…');
+  if (note) toast(note, 4500);
+  try {
+    V.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+  } catch (e) { voiceClose('cancel'); toast('Não consegui usar o microfone. Permita o microfone para o site nas configurações.', 5000); return; }
+  if (!V.on) { V.stream.getTracks().forEach(t => t.stop()); V.stream = null; return; }
+  const mime = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'].find(t => { try { return MediaRecorder.isTypeSupported(t); } catch (e) { return false; } });
+  V.chunks = []; V.mr = new MediaRecorder(V.stream, mime ? { mimeType: mime } : {});
+  V.mr.ondataavailable = e => { if (e.data && e.data.size) V.chunks.push(e.data); };
+  V.mr.start(1000); V.recT0 = Date.now();
+  // medidor de volume de verdade (o que o microfone está captando)
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext; V.actx = new AC();
+    const an = V.actx.createAnalyser(); an.fftSize = 512; V.actx.createMediaStreamSource(V.stream).connect(an);
+    const buf = new Uint8Array(an.fftSize), cv = voiceEl().querySelector('.v-wave'), cx = cv.getContext('2d'), hist = new Array(60).fill(0);
+    const draw = () => {
+      an.getByteTimeDomainData(buf); let pk = 0; for (const v of buf) pk = Math.max(pk, Math.abs(v - 128)); hist.push(Math.min(1, pk / 70)); hist.shift();
+      cx.clearRect(0, 0, cv.width, cv.height); cx.fillStyle = '#FFB547';
+      const bw = cv.width / hist.length; hist.forEach((h, i) => { const bh = Math.max(3, h * cv.height); cx.fillRect(i * bw + 2, (cv.height - bh) / 2, bw - 4, bh); });
+      V.raf = requestAnimationFrame(draw);
+    };
+    draw();
+  } catch (e) {}
+}
+function recordStopRaw() {
+  return new Promise(res => {
+    cancelAnimationFrame(V.raf); V.raf = 0;
+    if (V.actx) { V.actx.close().catch(() => {}); V.actx = null; }
+    const mr = V.mr; V.mr = null;
+    const end = () => { if (V.stream) { V.stream.getTracks().forEach(t => t.stop()); V.stream = null; } res(V.chunks.length ? new Blob(V.chunks, { type: (mr && mr.mimeType) || 'audio/webm' }) : null); };
+    if (!mr || mr.state === 'inactive') { end(); return; }
+    V.recSecs = (Date.now() - V.recT0) / 1000;
+    mr.onstop = end; try { mr.stop(); } catch (e) { end(); }
+  });
+}
+async function voiceClose(how) {
+  if (!V.on || V.working) return;
+  const w = voiceEl();
+  if (how === 'cancel') {
+    V.on = false; const r = V.rec; V.rec = null; try { r && r.abort(); } catch (e) {}
+    await recordStopRaw(); clearInterval(V.tick); w.hidden = true; return;
+  }
+  clearInterval(V.tick);
+  if (V.mode === 'live') await liveStop();
+  let text = V.committed;
+  if (V.mode === 'record') {
+    const blob = await recordStopRaw();
+    if (blob && V.recSecs > 0.4) {
+      V.working = true; voicePaint('Entendendo o que você falou…');
+      try {
+        const lang = String(prefs.voiceLang).startsWith('pt') ? 'portuguese' : 'english';
+        const t = await whisperText(blob, V.recSecs, { language: lang, onProgress: ev => { if (ev.stage === 'modelo') voicePaint(ev.p ? `Preparando o reconhecimento (só na 1ª vez): ${Math.round(ev.p * 100)}%` : 'Preparando o reconhecimento (só na 1ª vez)…'); else voicePaint('Entendendo o que você falou…'); } });
+        text = joinTxt(text, t);
+      } catch (e) {
+        console.warn(e); V.working = false;
+        if (!text.trim()) { V.on = false; w.hidden = true; V.onDone = null; toast('Não consegui transcrever (na primeira vez precisa de internet para baixar o reconhecimento). Tente de novo ou use o microfone do teclado.', 6500); return; }
+      }
+      V.working = false;
+    }
+  }
+  V.on = false; w.hidden = true;
+  const cb = V.onDone; V.onDone = null;
+  if (cb) cb(text.trim(), how === 'send');
+}
+function setupMic(btn, target, sendFn) {
   btn.addEventListener('click', () => {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) { toast('Este navegador não tem reconhecimento de voz. Use o microfone do teclado.', 4500); target.focus(); return; }
-    if (rec) { rec.stop(); return; }
-    rec = new SR(); rec.lang = prefs.voiceLang; rec.interimResults = true; rec.continuous = true;
-    const before = target.value ? target.value.trim() + ' ' : ''; let fin = '';
-    rec.onresult = e => { let mid = ''; for (let i = e.resultIndex; i < e.results.length; i++) { const r = e.results[i]; if (r.isFinal) fin += r[0].transcript + ' '; else mid += r[0].transcript; } target.value = before + fin + mid; };
-    rec.onerror = e => { if (e.error === 'not-allowed') toast('Permita o microfone para o site nas configurações do Safari/Chrome.', 4500); };
-    rec.onend = () => { btn.classList.remove('on'); rec = null; target.value = target.value.trim(); if (autoSend && target.value) runEdit(target.value); };
-    btn.classList.add('on'); rec.start();
+    if (V.on) return;
+    if (!SRclass() && !(navigator.mediaDevices && window.MediaRecorder)) { toast('Este navegador não deixa usar o microfone. Use o microfone do teclado.', 4500); target.focus(); return; }
+    const before = target.value.trim();
+    voiceOpen((text, send) => {
+      const full = joinTxt(before, text);
+      if (send) { if (!full) { toast('Não ouvi nada. Tente de novo.'); return; } target.value = ''; sendFn(full); }
+      else { target.value = full; target.focus(); try { target.setSelectionRange(full.length, full.length); } catch (e) {} }
+    });
   });
 }
 
@@ -933,7 +1086,7 @@ function bind() {
   $('#refIn').addEventListener('change', e => { const f = [...e.target.files]; e.target.value = ''; if (f.length) addFiles(f, { role: 'reference' }); });
   $('#btnSend').addEventListener('click', () => runEdit($('#aiInput').value));
   $('#aiInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); runEdit($('#aiInput').value); } });
-  setupMic($('#btnMic'), $('#aiInput'));
+  setupMic($('#btnMic'), $('#aiInput'), t => runEdit(t));
   $('#btnPlay').addEventListener('click', togglePlay); $('#preview').addEventListener('click', togglePlay);
   $('#btnUndo').addEventListener('click', undo); $('#btnRedo').addEventListener('click', redo);
   $('#btnExport').addEventListener('click', exportSheet);

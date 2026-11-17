@@ -32,18 +32,33 @@ export function alignScript(text, speech) {
 }
 
 // Whisper no aparelho.
-let pipe = null;
-export async function whisperTranscribe(src, { language = null, model = 'onnx-community/whisper-base', onProgress = () => {} } = {}) {
-  if (!pipe) {
+let pipe = null, loading = null;
+async function getPipe(model, onProgress) {
+  if (pipe) return pipe;
+  if (!loading) loading = (async () => {
     onProgress({ stage: 'modelo', p: 0, label: 'Baixando o modelo de transcrição (só na primeira vez)' });
     const mod = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.2');
     mod.env.allowLocalModels = false;
     const device = navigator.gpu ? 'webgpu' : 'wasm';
-    pipe = await mod.pipeline('automatic-speech-recognition', model, {
+    return await mod.pipeline('automatic-speech-recognition', model, {
       device, dtype: device === 'webgpu' ? 'fp32' : 'q8',
       progress_callback: e => { if (e.status === 'progress' && e.total) onProgress({ stage: 'modelo', p: e.loaded / e.total, label: 'Baixando o modelo de transcrição' }); },
     });
-  }
+  })();
+  try { pipe = await loading; return pipe; } catch (e) { loading = null; throw e; }
+}
+// Pedido falado curto (gravado pelo microfone): devolve só o texto.
+export async function whisperText(blob, seconds, { language = null, model = 'onnx-community/whisper-base', onProgress = () => {} } = {}) {
+  const p = await getPipe(model, onProgress);
+  onProgress({ stage: 'transcrevendo', p: 0, label: 'Entendendo o que você falou' });
+  const bytes = await blob.arrayBuffer();
+  const ctx = new OfflineAudioContext(1, Math.ceil((seconds + 2) * 16000), 16000);
+  const ab = await ctx.decodeAudioData(bytes);
+  const res = await p(mixToMono(ab), { chunk_length_s: 30, stride_length_s: 5, ...(language ? { language, task: 'transcribe' } : {}) });
+  return String(res.text || '').trim();
+}
+export async function whisperTranscribe(src, { language = null, model = 'onnx-community/whisper-base', onProgress = () => {} } = {}) {
+  pipe = await getPipe(model, onProgress);
   onProgress({ stage: 'transcrevendo', p: 0, label: `Transcrevendo "${src.name}"` });
   const ab = await decodeAudio(src, 16000, 1);
   if (!ab) return { words: [], text: '' };

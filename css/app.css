@@ -220,3 +220,25 @@ select option{background:#1a1a1d;color:#fff}
 .r-answer{white-space:pre-wrap;font-size:14px;line-height:1.45;margin-top:4px}
 .kv{display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid var(--line,#222);font-size:14px}.kv b{text-align:right;font-weight:600}
 .list .row{display:flex;align-items:center;gap:8px}.list .row.on b{color:var(--amber)}.row-main{flex:1;text-align:left;background:none;border:0;color:inherit;font:inherit;padding:6px 0;cursor:pointer}
+
+/* ---------- microfone (painel de fala) ---------- */
+.voice{position:fixed;left:0;right:0;bottom:0;z-index:60;padding:14px 16px calc(14px + var(--sab));background:var(--s1);border-top:1px solid var(--line2);border-radius:20px 20px 0 0;box-shadow:0 -12px 40px rgba(0,0,0,.55);animation:vup .18s ease-out}
+@keyframes vup{from{transform:translateY(30px);opacity:0}to{transform:none;opacity:1}}
+@media (min-width:700px){.voice{left:50%;right:auto;width:560px;margin-left:-280px;bottom:18px;border-radius:20px;border:1px solid var(--line2)}}
+.v-head{display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;color:var(--ink2)}
+.v-dot{width:10px;height:10px;border-radius:50%;background:var(--red);animation:vpulse 1.2s ease-in-out infinite}
+.voice.working .v-dot{background:var(--amber)}
+@keyframes vpulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.8)}}
+.v-time{margin-left:auto;font-variant-numeric:tabular-nums;color:var(--ink3)}
+.v-text{margin:10px 0 8px;min-height:64px;max-height:32vh;overflow:auto;font-size:19px;line-height:1.35;color:var(--ink)}
+.v-mid{color:var(--ink2)}
+.v-hint{color:var(--ink3);font-size:15px}
+.v-wave{display:none;width:100%;height:40px;margin-bottom:6px}
+.voice.rec .v-wave{display:block}
+.voice.working .v-wave{opacity:.25}
+.v-btns{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-top:4px}
+.v-btn{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--ink2)}
+.v-ico{width:56px;height:56px;border-radius:50%;display:grid;place-items:center;background:var(--s3);color:var(--ink)}
+.v-stop .v-ico .sq{display:block;width:18px;height:18px;border-radius:4px;background:var(--ink)}
+.v-send .v-ico{background:var(--amber);color:var(--amberInk);width:64px;height:64px;margin:-4px 0}
+.voice.working .v-btn{opacity:.4;pointer-events:none}

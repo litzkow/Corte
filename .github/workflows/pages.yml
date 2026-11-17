@@ -25,6 +25,7 @@ jobs:
         run: |
           mkdir -p _site
           cp -r index.html manifest.webmanifest css js icons _site/
+          node tools/stamp.mjs _site "${GITHUB_SHA::8}"
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
