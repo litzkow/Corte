@@ -15,6 +15,22 @@ export function visualSegments(plan) {
   for (const c of plan.clips) {
     const base = { clipId: c.id, kind: c.kind, zoom: c.zoom || [1, 1], clipStart: c.start, clipDur: c.dur, focus: c.focus || [], face: !!c.face, lum: c.lum, fit: c.fit || plan.fit || false, still: !!c.still };
     const covers = (c.covers || []).filter(x => x.len > 0.02).sort((a, b) => a.offset - b.offset);
+    if (plan.layout === 'split' && covers.length && c.speed === 1 && !c.noVideo) {
+      // tela dividida: quem fala fica embaixo o corte inteiro; as imagens trocam em cima
+      segs.push({ ...base, id: c.id + 'b', srcId: c.srcId, start: c.start, dur: c.dur, in: c.in, speed: 1, trans: { type: 'cut', dur: 0 }, panel: 'bottom', zoom: [1.04, 1.04] });
+      let t = 0;
+      covers.forEach((cv, i) => {
+        const len = Math.min(cv.len, c.dur - cv.offset);
+        const s0 = { ...base, id: c.id + 'c' + i, srcId: cv.srcId, start: c.start + cv.offset, dur: len, in: cv.in, speed: 1, trans: { type: 'cut', dur: 0 }, kind: 'cover', focus: cv.focus || [], face: !!cv.face, lum: cv.lum, zoom: cv.still ? (i % 2 ? [1.14, 1.02] : [1.02, 1.14]) : [1.0, 1.06], clipStart: c.start + cv.offset, clipDur: len, still: !!cv.still, panel: 'top' };
+        // sem buraco em cima: a imagem anterior segura até a próxima
+        const prevTop = [...segs].reverse().find(x => x.panel === 'top' && x.clipId === c.id);
+        if (cv.offset > t + 0.02 && prevTop) prevTop.dur += cv.offset - t; else if (cv.offset > t + 0.02) { s0.start = c.start + t; s0.dur += cv.offset - t; }
+        segs.push(s0); t = cv.offset + len;
+      });
+      const lastTop = [...segs].reverse().find(x => x.panel === 'top' && x.clipId === c.id);
+      if (lastTop && t < c.dur - 0.02) lastTop.dur += c.dur - t;
+      continue;
+    }
     if (covers.length && c.speed === 1) {
       const mainHasVideo = !c.noVideo;
       let t = 0; let k = 0;
@@ -25,7 +41,7 @@ export function visualSegments(plan) {
         const first = cv.offset < 0.02;
         // fotos ganham movimento lento alternado (Ken Burns); vídeo de apoio, um empurrão leve
         const kb = cv.still ? (i % 2 ? [1.14, 1.02] : [1.02, 1.14]) : [1.0, 1.06];
-        segs.push({ ...base, id: c.id + 'c' + i, srcId: cv.srcId, start: c.start + cv.offset, dur: len, in: cv.in, speed: 1, trans: first ? c.trans : (mainHasVideo ? { type: 'cut', dur: 0 } : (cv.trans || { type: 'cut', dur: 0 })), kind: 'cover', focus: cv.focus || [], face: !!cv.face, lum: cv.lum, zoom: kb, clipStart: c.start + cv.offset, clipDur: len, still: !!cv.still });
+        segs.push({ ...base, id: c.id + 'c' + i, srcId: cv.srcId, start: c.start + cv.offset, dur: len, in: cv.in, speed: 1, trans: first ? c.trans : (mainHasVideo ? { type: 'cut', dur: 0 } : (cv.trans || { type: 'cut', dur: 0 })), kind: 'cover', focus: cv.focus || [], face: !!cv.face, lum: cv.lum, zoom: kb, clipStart: c.start + cv.offset, clipDur: len, still: !!cv.still, card: plan.layout === 'card' && !!cv.card });
         t = cv.offset + len;
       });
       if (t < c.dur - 0.02) { if (mainHasVideo) pushMain(t, c.dur, false); else segs[segs.length - 1].dur += c.dur - t; }
@@ -34,8 +50,10 @@ export function visualSegments(plan) {
     }
   }
   // janela ativa de cada trecho (inclui metade das transições)
+  // ordem no tempo (a tela dividida intercala os dois painéis)
+  segs.sort((a, b) => a.start - b.start || (a.panel === 'bottom' ? -1 : 1));
   for (let i = 0; i < segs.length; i++) {
-    const s = segs[i], nx = segs[i + 1];
+    const s = segs[i], nx = segs.slice(i + 1).find(x => (x.panel === 'bottom') === (s.panel === 'bottom'));
     const tIn = s.trans && s.trans.dur ? s.trans.dur / 2 : 0;
     const tOut = nx && nx.trans && nx.trans.dur ? nx.trans.dur / 2 : 0;
     s.a0 = s.start - tIn; s.a1 = s.start + s.dur + tOut;
@@ -216,7 +234,7 @@ export class Renderer {
     return active;
   }
 
-  layerFor(seg, t) {
+  layerFor(seg, t, PW = this.W, PH = this.H) {
     const a = this.assign.get(seg.id); if (!a) return null;
     const src = this.getSrc(seg.srcId);
     const sT = srcTime(seg, t);
@@ -229,8 +247,8 @@ export class Renderer {
     const sw = src.width || a.el.videoWidth, sh = src.height || a.el.videoHeight;
     return {
       el: ready ? a.el : null, ready,
-      crop: coverCrop(sw, sh, this.W, this.H, seg.fit ? 1 : z, f, seg.face),
-      fit: seg.fit, fitRect: seg.fit ? fitRect(sw, sh, this.W, this.H, z) : null,
+      crop: coverCrop(sw, sh, PW, PH, seg.fit ? 1 : z, f, seg.face),
+      fit: seg.fit, fitRect: seg.fit ? fitRect(sw, sh, PW, PH, z) : null, sw, sh,
       exp, f,
     };
   }
@@ -250,14 +268,30 @@ export class Renderer {
 
   drawAt(t) {
     const plan = this.plan;
-    const active = this.segs.filter(s => t >= s.a0 && t < s.a1);
+    const all = this.segs.filter(s => t >= s.a0 && t < s.a1);
+    const bottom = all.find(s => s.panel === 'bottom');
+    const active = all.filter(s => s.panel !== 'bottom');
+    // tela dividida: imagens no painel de cima (altura split), quem fala embaixo
+    const split = !!(bottom && active.length && active.some(s => s.panel === 'top'));
+    const topH = split ? Math.round(this.H * (plan.split || 0.62)) : this.H;
     let A = null, B = null, mix = 0, trans = 'cut';
     if (active.length >= 2) {
       const [s0, s1] = active.sort((x, y) => x.start - y.start);
       const d = s1.trans.dur || 0.001;
       mix = clamp((t - (s1.start - d / 2)) / d, 0, 1); trans = s1.trans.type;
-      A = this.layerFor(s0, t); B = this.layerFor(s1, t);
-    } else if (active.length === 1) A = this.layerFor(active[0], t);
+      A = this.layerFor(s0, t, this.W, topH); B = this.layerFor(s1, t, this.W, topH);
+    } else if (active.length === 1) A = this.layerFor(active[0], t, this.W, topH);
+    else if (bottom) A = this.layerFor(bottom, t);
+    // card flutuante: a imagem num cartão no meio de um fundo cinza
+    const cardSeg = !split && active.length === 1 && active[0].card ? active[0] : null;
+    let cardRect = null;
+    if (cardSeg && A) {
+      const asp = clamp((A.sw || 16) / (A.sh || 9), 0.8, 1.35);
+      const cw = Math.round(this.W * 0.86), ch = Math.round(Math.min(this.H * 0.62, cw / asp));
+      const cy = Math.round(this.H * 0.47 - ch / 2);
+      cardRect = [Math.round((this.W - cw) / 2), cy, cw, ch];   // x, y (de cima), w, h
+      A = this.layerFor(cardSeg, t, cw, ch);
+    }
     // onde está o assunto na tela (para textos que seguem a pessoa)
     const L0 = mix > 0.5 && B ? B : A;
     if (L0 && L0.f && !L0.fit) { const c = L0.crop; this._subj = { x: clamp((L0.f.x - c[0]) / c[2], 0.15, 0.85), y: clamp((L0.f.y - c[1]) / c[3], 0.2, 0.75) }; }
@@ -277,26 +311,56 @@ export class Renderer {
     if (trans === 'flash' && B) flash = Math.max(flash, Math.pow(1 - Math.abs(mix - 0.5) * 2, 2) * 0.95);
     // fade de entrada/saída do vídeo
     const T = plan.duration;
-    const fadeOut = clamp((T - t) / (plan.endFade || 0.5), 0, 1), fadeIn = clamp(t / 0.25, 0, 1);
+    const fadeOut = clamp((T - t) / (plan.endFade || 0.5), 0, 1), fadeIn = plan.noFadeIn ? 1 : clamp(t / 0.25, 0, 1);
     const lb = plan.letterbox && this.W > this.H ? 0.12 : plan.letterbox ? 0 : 0;
     if (A) {
       // trechos com cor/efeito próprios (ex.: "preto e branco só no final", "VHS no começo")
       const sec = (plan.sectionFx || []).find(x => t >= x.from && t < x.to);
       const look = sec && sec.look ? sec.look : plan.look.id;
       const adjust = sec && sec.adjust ? { ...(plan.adjust || {}), ...sec.adjust } : plan.adjust;
-      this.comp.draw({ A: A.ready ? A : { ...A, el: null }, B: B && B.ready ? B : (B ? { ...B, el: null } : null), mix, trans, shake, flash, look, intensity: sec && sec.look ? 0.9 : plan.look.intensity, grainOver: plan.look.grain, letterbox: lb, leak: plan.lightLeak * (trans !== 'cut' ? 1 - Math.abs(mix - 0.5) * 2 : 0.15), time: t, skin: 1, adjust, mirror: plan.mirror });
+      const common = { shake, flash, look, intensity: sec && sec.look ? 0.9 : plan.look.intensity, grainOver: plan.look.grain, letterbox: lb, time: t, skin: 1, adjust, mirror: plan.mirror };
+      if (cardRect) {
+        const [x, y, w, h] = cardRect, gy = this.H - y - h, off = Math.round(this.W * 0.012);
+        this.comp.fill([0, 0, this.W, this.H], [0.44, 0.45, 0.47]);
+        this.comp.fill([x + off, gy - off, w, h], [0.27, 0.28, 0.3]);   // sombra
+        this.comp.draw({ ...common, A: A.ready ? A : { ...A, el: null }, B: null, mix: 0, trans: 'cut', leak: 0, vp: [x, gy, w, h] });
+      } else if (split) {
+        const bH = this.H - topH;
+        this.comp.draw({ ...common, A: A.ready ? A : { ...A, el: null }, B: B && B.ready ? B : (B ? { ...B, el: null } : null), mix, trans, leak: 0, vp: [0, bH, this.W, topH] });
+        const L = this.layerFor(bottom, t, this.W, bH);
+        if (L) this.comp.draw({ ...common, flash: 0, A: L.ready ? L : { ...L, el: null }, B: null, mix: 0, trans: 'cut', leak: 0, vp: [0, 0, this.W, bH] });
+      } else {
+        this.comp.draw({ ...common, A: A.ready ? A : { ...A, el: null }, B: B && B.ready ? B : (B ? { ...B, el: null } : null), mix, trans, leak: plan.lightLeak * (trans !== 'cut' ? 1 - Math.abs(mix - 0.5) * 2 : 0.15) });
+      }
     }
     const c = this.ctx;
     c.globalAlpha = 1;
     if (this.live) c.clearRect(0, 0, this.W, this.H);   // prévia: só a camada de textos é redesenhada
     else c.drawImage(this.glCanvas, 0, 0);             // exportação: junta imagem e textos num quadro só
+    if (split) { c.fillStyle = '#FFFFFF'; c.fillRect(0, topH - Math.round(this.H * 0.0016), this.W, Math.max(2, Math.round(this.H * 0.0032))); }
     if (fadeOut < 1 || fadeIn < 1) { c.fillStyle = `rgba(0,0,0,${1 - Math.min(fadeOut, fadeIn)})`; c.fillRect(0, 0, this.W, this.H); }
     if (this.overlays) this.overlays.draw(c, t, this.W, this.H);
     this.stats.frames++;
   }
 
   // ----- quadro parado (para miniatura, conferência e linha do tempo) -----
-  async frameAt(t) {
+  // Avança o vídeo tocando até o quadro pedido (em vez de buscar): na exportação, quadro seguido de quadro
+  // fica muitas vezes mais rápido, porque buscar obriga a decodificar desde o último quadro-chave.
+  stepTo(el, want, fps) {
+    if (typeof el.requestVideoFrameCallback !== 'function' || el.seeking || el.readyState < 2) return Promise.resolve(false);
+    const d = want - el.currentTime;
+    if (!(d > 0.002 && d < 0.75)) return Promise.resolve(false);
+    return new Promise(res => {
+      let done = false;
+      const fin = ok => { if (done) return; done = true; clearTimeout(to); try { el.pause(); } catch (e) {} res(ok); };
+      const to = setTimeout(() => fin(false), 1500);
+      const tick = (now, meta) => { if (done) return; if (meta.mediaTime >= want - 0.6 / fps) fin(true); else el.requestVideoFrameCallback(tick); };
+      el.requestVideoFrameCallback(tick);
+      el.playbackRate = 1;
+      const p = el.play(); if (p && p.catch) p.catch(() => fin(false));
+    });
+  }
+  async frameAt(t, { step = 0 } = {}) {
     t = clamp(t, 0, this.plan.duration - 0.01);
     this.t = t;
     const active = this.segs.filter(s => t >= s.a0 && t < s.a1);
@@ -304,6 +368,7 @@ export class Renderer {
       const a = this.elFor(s, t);
       if (!a || a.still) continue;
       const want = srcTime(s, t);
+      if (step && s.speed !== 'freeze') { const ok = await this.stepTo(a.el, want, step); if (ok && Math.abs(a.el.currentTime - want) < 1.5 / step) { this.stats.steps = (this.stats.steps || 0) + 1; continue; } this.stats.stepMiss = (this.stats.stepMiss || 0) + 1; this._lastMiss = [ok, +(a.el.currentTime - want).toFixed(3)]; }
       a.el.pause();
       if (Math.abs(a.el.currentTime - want) > 0.01) a.el.currentTime = want;
       // espera a busca terminar (vários eventos servem; um vídeo já carregado não dispara "loadeddata" de novo)
@@ -405,11 +470,18 @@ export class Renderer {
     ve.configure({ codec: sup.video, width: W, height: H, bitrate, framerate: fps, avc: { format: 'avc' }, latencyMode: 'quality', bitrateMode: 'variable' });
     const N = Math.max(1, Math.round(this.plan.duration * fps));
     const t0 = performance.now();
+    // os vídeos precisam estar na página (invisíveis) para o navegador entregar quadros enquanto tocam
+    const holder = document.createElement('div');
+    Object.assign(holder.style, { position: 'fixed', left: '0', top: '0', width: '2px', height: '2px', overflow: 'hidden', opacity: '0.01', pointerEvents: 'none', zIndex: '-1' });
+    document.body.appendChild(holder);
+    const parked = [];
+    for (const list of this.pools.values()) for (const a of list) if (a.el && !a.still && !a.el.parentNode) { holder.appendChild(a.el); parked.push(a.el); }
+    try {
     for (let i = 0; i < N; i++) {
       if (signal && signal.aborted) { try { ve.close(); } catch (e) {} const er = new Error('cancelado'); er.cancelled = true; throw er; }
       if (err) throw err;
       const t = i / fps;
-      await this.frameAt(t);
+      await this.frameAt(t, { step: fps });
       const vf = new VideoFrame(this.out, { timestamp: Math.round(i * 1e6 / fps), duration: Math.round(1e6 / fps) });
       ve.encode(vf, { keyFrame: i % (fps * 2) === 0 });
       vf.close();
@@ -419,6 +491,7 @@ export class Renderer {
         onProgress((i + 1) / N * 0.95, { frame: i + 1, frames: N, etaSec: (N - i - 1) / Math.max(rate, 0.01) });
       }
     }
+    } finally { for (const v of parked) { try { v.pause(); } catch (e) {} v.remove(); } holder.remove(); }
     await ve.flush(); ve.close();
     if (err) throw err;
     // som

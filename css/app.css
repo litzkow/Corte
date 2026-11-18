@@ -242,3 +242,6 @@ select option{background:#1a1a1d;color:#fff}
 .v-stop .v-ico .sq{display:block;width:18px;height:18px;border-radius:4px;background:var(--ink)}
 .v-send .v-ico{background:var(--amber);color:var(--amberInk);width:64px;height:64px;margin:-4px 0}
 .voice.working .v-btn{opacity:.4;pointer-events:none}
+
+/* legenda automática trabalhando */
+.tr-pill{position:absolute;left:50%;top:10px;transform:translateX(-50%);z-index:8;background:rgba(10,10,12,.78);color:var(--ink);border:1px solid var(--line2);border-radius:999px;padding:6px 12px;font-size:12px;font-weight:600;white-space:nowrap;max-width:92%;overflow:hidden;text-overflow:ellipsis;pointer-events:none;backdrop-filter:blur(6px)}

@@ -10,7 +10,7 @@ import { musicMoodScores } from './engine/analyze-audio.js';
 import { buildPlan } from './engine/planner.js';
 import { Renderer, visualSegments, VideoPool, MixCache } from './engine/render.js';
 import { Compositor } from './engine/gl.js';
-import { PRESETS, LOOKS } from './engine/styles.js';
+import { PRESETS, LOOKS, FORMAT_IDS } from './engine/styles.js';
 import { PLATFORMS } from './engine/platforms.js';
 import { CAPTION_STYLES, SHAPES, TEXT_STYLES, drawTextBlock, drawCaption, groupWords, markEmphasis, drawShape, ensureFonts, FONTS, googleFontsHref } from './engine/captions.js';
 import { alignScript, whisperTranscribe, whisperText } from './engine/transcribe.js';
@@ -30,7 +30,7 @@ const tc = (t, dec = true) => { t = Math.max(0, t || 0); const m = Math.floor(t 
 document.head.append(el('link', { rel: 'stylesheet', href: googleFontsHref() }));
 
 // ---------------- estado ----------------
-const prefs = Object.assign({ format: 'reels', voiceLang: 'pt-BR', voiceEngine: 'auto' }, store.loadPrefs());
+const prefs = Object.assign({ format: 'reels', voiceLang: 'pt-BR', voiceEngine: 'auto', autoCaptions: true }, store.loadPrefs());
 const S = {
   project: null, sources: [], music: null, musicA: null, ref: null, refPending: false, items: new Map(),
   versions: [], cur: -1, transcript: {}, pendingStyle: null,
@@ -58,14 +58,14 @@ function showHome() {
   renderStyleRail(); renderProjects();
   railAnim();
 }
-const RAIL = ['social', 'energetic', 'cinematic', 'action', 'documentary', 'emotional', 'travel', 'podcast', 'trailer', 'luxury', 'vlog', 'musicvideo'];
+const RAIL = [...FORMAT_IDS, 'energetic', 'cinematic', 'travel', 'podcast', 'documentary', 'emotional'];
 function renderStyleRail() {
   const r = $('#styleRail'); r.innerHTML = '';
   for (const id of RAIL) {
     const p = PRESETS[id];
     r.append(el('button', { class: 'style-card', onclick: () => { newProject(); S.pendingStyle = id; $('#fileIn').click(); } },
       el('canvas', { width: '272', height: '423', 'data-kind': 'style', 'data-id': id }),
-      el('div', { class: 'sc-t' }, el('b', {}, p.label), el('span', {}, p.desc.split('.')[0]))));
+      el('div', { class: 'sc-t' }, el('b', {}, p.label), el('span', {}, p.short || p.desc.split('.')[0]))));
   }
 }
 async function renderProjects() {
@@ -90,11 +90,25 @@ function paintSample(c, t, kind, id, extra = {}) {
   const g = ctx.createLinearGradient(0, 0, W, H);
   g.addColorStop(0, `hsl(${215 - warm * 300},${30 * sat}%,${16 / con + 4}%)`); g.addColorStop(0.55, `hsl(${330 - warm * 200},${22 * sat}%,26%)`); g.addColorStop(1, `hsl(25,${55 * sat}%,${42 * (2 - con)}%)`);
   ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
-  ctx.fillStyle = 'rgba(240,205,180,.85)'; ctx.beginPath(); ctx.ellipse(W / 2, H * 0.34, W * 0.16, W * 0.21, 0, 0, 7); ctx.fill();
-  ctx.fillStyle = 'rgba(30,40,70,.9)'; ctx.beginPath(); ctx.ellipse(W / 2, H * 0.8, W * 0.42, H * 0.22, 0, 0, 7); ctx.fill();
+  const FXs = kind === 'style' ? (PRESETS[id].fmt || {}) : {};
+  const person = (cy, sc) => { ctx.fillStyle = 'rgba(240,205,180,.85)'; ctx.beginPath(); ctx.ellipse(W / 2, cy, W * 0.16 * sc, W * 0.21 * sc, 0, 0, 7); ctx.fill(); ctx.fillStyle = 'rgba(30,40,70,.9)'; ctx.beginPath(); ctx.ellipse(W / 2, cy + W * 0.62 * sc, W * 0.42 * sc, H * 0.22 * sc, 0, 0, 7); ctx.fill(); };
+  const scene = (x, y, w, h, k) => { const gg = ctx.createLinearGradient(0, y, 0, y + h); gg.addColorStop(0, k % 2 ? '#3E6C9E' : '#E8873A'); gg.addColorStop(1, k % 2 ? '#1D2B45' : '#B5476A'); ctx.fillStyle = gg; ctx.fillRect(x, y, w, h); ctx.fillStyle = k % 2 ? 'rgba(160,40,60,.9)' : 'rgba(255,240,160,.95)'; if (k % 2) for (let i = 0; i < 5; i++) ctx.fillRect(x + w * (0.08 + i * 0.18), y + h * (0.45 + 0.1 * Math.sin(i * 2)), w * 0.13, h); else { ctx.beginPath(); ctx.arc(x + w * 0.5, y + h * 0.62, w * 0.14, 0, 7); ctx.fill(); ctx.fillStyle = '#0D1226'; ctx.fillRect(x, y + h * 0.66, w, h * 0.34); } };
+  const k = Math.floor(t / 1.15);
+  if (FXs.layout === 'split') {
+    ctx.save(); ctx.beginPath(); ctx.rect(0, H * 0.62, W, H * 0.38); ctx.clip(); person(H * 0.74, 0.62); ctx.restore();
+    scene(0, 0, W, H * 0.62, k); ctx.fillStyle = '#FFF'; ctx.fillRect(0, H * 0.62 - 2, W, 4);
+  } else if (FXs.layout === 'card') {
+    if (k % 2) { ctx.fillStyle = '#707379'; ctx.fillRect(0, 0, W, H); ctx.fillStyle = '#45474C'; ctx.fillRect(W * 0.08, H * 0.33, W * 0.86, H * 0.32); scene(W * 0.07, H * 0.32, W * 0.86, H * 0.32, k >> 1); }
+    else person(H * 0.34, 1);
+  } else if (FXs.fullCover) scene(0, 0, W, H, k);
+  else person(H * 0.34, FXs.altClose && k % 3 === 2 ? 1.5 : 1);
   if (look && look.vignette) { const v = ctx.createRadialGradient(W / 2, H / 2, H * 0.2, W / 2, H / 2, H * 0.75); v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, `rgba(0,0,0,${look.vignette * 1.4})`); ctx.fillStyle = v; ctx.fillRect(0, 0, W, H); }
   const area = { x: W * 0.06, y: H * 0.1, w: W * 0.88, h: H * 0.75 };
-  if (kind === 'style') { const cs = PRESETS[id].captions.style; drawCaption(ctx, groupWords(markEmphasis(SAMPLE), cs), t, cs, area, H * 0.62, {}); }
+  if (kind === 'style') {
+    const cs = PRESETS[id].captions.style;
+    if (FXs.phrase) drawTextBlock(ctx, { text: FXs.perCut ? TEXT_STYLES[FXs.phrase].sample.split('|')[k % 3].trim() : TEXT_STYLES[FXs.phrase].sample, style: FXs.phrase, start: 0, dur: 99, y: null, beats: null }, t + 1, W, H, area);
+    if (!FXs.musicOnly) drawCaption(ctx, groupWords(markEmphasis(SAMPLE), cs), t, cs, area, H * (FXs.captionY || 0.62), {});
+  }
   else if (kind === 'cap') drawCaption(ctx, groupWords(markEmphasis(SAMPLE), id), t, id, area, H * 0.66, {});
   else if (kind === 'block') drawTextBlock(ctx, { text: extra.text || TEXT_STYLES[id].sample, style: id, start: 0, dur: 4.6, y: TEXT_STYLES[id].render === 'loading' ? 0.3 : 0.42, beats: [0.2, 0.6, 1, 1.4, 1.8, 2.2, 2.6, 3, 3.4, 3.8] }, t, W, H, area);
   else if (kind === 'shape') drawShape(ctx, { shape: id, text: extra.text || 'SIGA PARA MAIS', x: 0.5, y: id === 'arc' ? 0.22 : 0.42, size: 1, start: 0, dur: 99, color: extra.color || '#FFFFFF', accent: '#FFE81F' }, t + 0.6, W, H, null);
@@ -167,7 +181,36 @@ async function addFiles(files, { role } = {}) {
   }
   renderAll(); autosave();
   if (added && !curV()) setTimeout(() => $('#aiInput').focus(), 200);
-  analyzeAll().catch(() => {});
+  analyzeAll().then(autoTranscribe).catch(() => {});
+}
+// Legenda automática: quando entra vídeo com fala, transcreve sozinho em segundo plano (Whisper no aparelho).
+// A edição não espera: quando a transcrição fica pronta, a prévia ganha legenda sem mudar o resto.
+const trTried = new Set(); let trRunning = false;
+async function autoTranscribe() {
+  if (!prefs.autoCaptions || trRunning) return;
+  const ids = footage().map(s => s.id).filter(id => { const it = S.items.get(id); return it && it.audio && it.audio.speechRatio > 0.3 && !S.transcript[id] && !trTried.has(id) && it.src.duration < 20 * 60; });
+  if (!ids.length) return;
+  trRunning = true;
+  const pill = $('#trPill'); const show = txt => { if (!pill) return; pill.hidden = !txt; pill.textContent = txt || ''; };
+  const lang = String(prefs.voiceLang).startsWith('pt') ? 'portuguese' : 'english';
+  let done = 0;
+  try {
+    for (const id of ids) {
+      trTried.add(id);
+      show('Legendando…');
+      const res = await whisperTranscribe(getSrc(id), { language: lang, onProgress: e => show(e.stage === 'modelo' ? `Preparando a legenda (só na 1ª vez) ${Math.round((e.p || 0) * 100)}%` : `Legendando "${getSrc(id).name.slice(0, 18)}"…`) });
+      if (res.words.length) { S.transcript[id] = { words: res.words, from: 'whisper' }; done++; }
+    }
+  } catch (e) {
+    console.warn(e); toast('Não consegui legendar sozinho agora (na primeira vez precisa de internet). Dá para tentar em Legendas.', 6000);
+  } finally { trRunning = false; show(''); }
+  if (done) { autosave(); refreshWithTranscript(); }
+}
+function refreshWithTranscript() {
+  if (S.busy) { S.trRefresh = true; return; }
+  S.trRefresh = false;
+  S.versions.forEach(v => { v.plan = null; });
+  if (curV()) showVersion(S.cur, false).then(() => toast('Legenda pronta.')).catch(() => {});
 }
 function setMusic(src) { if (src && !S.library.includes(src)) S.library.push(src); S.music = src; S.musicA = src ? S.libA.get(src.id) || null : null; renderAll(); autosave(); }
 // escolhe da biblioteca a música que combina: clima pedido (ou do estilo), duração e energia
@@ -208,7 +251,7 @@ function setBusy(on, list) {
   $('#busy').hidden = !on;
   $('#btnExport').disabled = on;   // enviar continua ligado: pedido feito durante o trabalho entra na fila
   if (on && list) { const ol = $('#stages'); ol.innerHTML = ''; for (const [k, l] of list) ol.append(el('li', { id: 'st_' + k }, el('span', {}, l), el('span', {}))); }
-  if (!on) renderAll();
+  if (!on) { renderAll(); if (S.trRefresh) setTimeout(refreshWithTranscript, 50); }
 }
 function stage(k, state, pct, label) { const li = document.getElementById('st_' + k); if (!li) return; li.className = state; if (label) li.firstChild.textContent = label; li.lastChild.textContent = state === 'run' && pct != null ? Math.round(pct * 100) + '%' : state === 'done' ? '✓' : ''; }
 
@@ -529,7 +572,7 @@ function aiSheet() {
   const mic = el('button', { class: 'ai-mic', 'aria-label': 'Falar', html: '<span class="ring"></span>' + icon('mic', 20) });
   setupMic(mic, ta, t => { closeSheet(); runEdit(t); });
   const go = el('button', { class: 'btn primary', onclick: () => { const t = ta.value.trim(); closeSheet(); runEdit(t); } }, curV() ? 'Ajustar' : 'Editar com IA');
-  const cards = el('div', { class: 'gal' }, ...Object.entries(PRESETS).map(([id, p]) => galBtn('style', id, p.label, p.desc, curV() && curV().spec.mix.length === 1 && curV().spec.mix[0].id === id, () => pickStyle(id))));
+  const cards = el('div', { class: 'gal' }, ...[...FORMAT_IDS, ...Object.keys(PRESETS).filter(id => !FORMAT_IDS.includes(id))].map(id => [id, PRESETS[id]]).map(([id, p]) => galBtn('style', id, p.label, p.desc, curV() && curV().spec.mix.length === 1 && curV().spec.mix[0].id === id, () => pickStyle(id))));
   openSheet('Editar com IA', 'Fale ou escreva. Ela entende português e inglês, com gíria e erro de digitação.', log,
     el('div', { class: 'field' }, ta), el('div', { style: 'display:flex;gap:10px;align-items:center' }, mic, el('div', { style: 'flex:1' }), go),
     label('Ou escolha um estilo'), cards);
@@ -560,7 +603,8 @@ function styleSheet() {
   const saved = store.loadStyles();
   openSheet('Estilos', 'Cada estilo muda o ritmo, a cor, as transições, o som e a legenda juntos.',
     saved.length ? [label('Meus estilos'), el('div', { class: 'chips' }, ...saved.map(st => el('button', { class: 'chip', onclick: () => { closeSheet(); if (curV()) changeSpec(s => { s.mix = deepClone(st.mix); s.over = { ...deepClone(st.over) }; if (st.caption) s.captions.style = st.caption; }, 'Meu estilo: ' + st.name); } }, st.name)))] : null,
-    label('Estilos'), el('div', { class: 'gal' }, ...Object.entries(PRESETS).map(([id, p]) => galBtn('style', id, p.label, p.desc, id === curId, () => pickStyle(id)))));
+    label('Formatos que viralizam'), el('div', { class: 'gal' }, ...FORMAT_IDS.map(id => galBtn('style', id, PRESETS[id].label, PRESETS[id].desc, id === curId, () => pickStyle(id)))),
+    label('Outros estilos'), el('div', { class: 'gal' }, ...Object.entries(PRESETS).filter(([id]) => !FORMAT_IDS.includes(id)).map(([id, p]) => galBtn('style', id, p.label, p.desc, id === curId, () => pickStyle(id)))));
 }
 // Legendas
 function speechSources(p) { return [...new Set(p.clips.filter(c => c.kind === 'dialogue' || c.kind === 'hook').map(c => c.srcId))].filter(id => { const it = S.items.get(id); return it && it.audio && it.audio.speechRatio > 0.15; }); }
@@ -852,6 +896,8 @@ function settingsSheet() {
   const styles = store.loadStyles();
   openSheet('Ajustes', null,
     label('Idioma da voz'), el('div', { class: 'chips' }, ...[['pt-BR', 'Português'], ['en-US', 'Inglês']].map(([k, l]) => el('button', { class: 'chip' + (prefs.voiceLang === k ? ' on' : ''), onclick: () => { prefs.voiceLang = k; store.savePrefs(prefs); settingsSheet(); } }, l))),
+    label('Legenda automática'), el('div', { class: 'chips' }, ...[[true, 'Ligada'], [false, 'Desligada']].map(([k, l]) => el('button', { class: 'chip' + (prefs.autoCaptions === k ? ' on' : ''), onclick: () => { prefs.autoCaptions = k; store.savePrefs(prefs); settingsSheet(); if (k) autoTranscribe(); } }, l))),
+    el('p', { class: 'muted' }, 'Ligada: quando entra vídeo com fala, o app transcreve sozinho no aparelho e põe legenda. Na primeira vez baixa o reconhecimento (uns 75 MB).'),
     label('Microfone'), el('div', { class: 'chips' }, ...[['auto', 'Ao vivo (do navegador)'], ['record', 'Gravar e transcrever no aparelho']].map(([k, l]) => el('button', { class: 'chip' + (prefs.voiceEngine === k ? ' on' : ''), onclick: () => { prefs.voiceEngine = k; store.savePrefs(prefs); settingsSheet(); } }, l))),
     el('p', { class: 'muted' }, 'Ao vivo mostra o texto enquanto você fala. Se ele cortar ou não entender, use "Gravar e transcrever": grava tudo e transcreve aqui mesmo (na primeira vez baixa o reconhecimento, uns 75 MB).'),
     label('Meus estilos (toque para apagar)'), styles.length ? el('div', { class: 'chips' }, ...styles.map(s => el('button', { class: 'chip', onclick: () => { store.saveStyles(store.loadStyles().filter(x => x.name !== s.name)); settingsSheet(); } }, s.name + ' ×'))) : el('p', { class: 'muted' }, 'Depois de gostar de um resultado, diga "salva esse estilo".'),
@@ -1067,6 +1113,7 @@ async function openProject(id) {
     setBusy(true, [['a', 'Reabrindo o projeto']]);
     try { await analyzeAll(); await showVersion(clamp(p.cur, 0, S.versions.length - 1), false); } catch (e) { toast(e.message); } finally { setBusy(false); }
   }
+  analyzeAll().then(autoTranscribe).catch(() => {});
 }
 
 // =====================================================================
@@ -1110,4 +1157,4 @@ function bind() {
 }
 
 bind(); showHome(); store.askPersist();
-window.__corte = { S, diagnosticsSheet, runEdit, addFiles, exportSheet, showVersion, togglePlay, seekTo, newProject, openProject, changeSpec, aiSheet, captionsSheet, colorSheet, audioSheet, textSheet, styleSheet, mediaSheet, formatSheet, qualitySheet, versionsSheet };
+window.__corte = { S, refreshWithTranscript, autoTranscribe, diagnosticsSheet, runEdit, addFiles, exportSheet, showVersion, togglePlay, seekTo, newProject, openProject, changeSpec, aiSheet, captionsSheet, colorSheet, audioSheet, textSheet, styleSheet, mediaSheet, formatSheet, qualitySheet, versionsSheet };

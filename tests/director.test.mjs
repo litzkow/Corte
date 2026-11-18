@@ -23,6 +23,15 @@ t('usa a música deste vídeo', s => s.music.fromVideo);
 t('Faz um reels de 30 segundos com legenda palavra por palavra e texto em círculo "SIGA PARA MAIS"', s => s.captions.style === 'hormozi' && s.texts[0].shape === 'circle' && s.texts[0].text === 'SIGA PARA MAIS' && s.outputs[0].duration === 30);
 t('texto em volta do rosto em círculo "INSCREVA-SE"', s => s.texts[0].follow === true);
 t('quero um vídeo de viagem cinematográfico de 1 minuto e meio para o youtube shorts', s => s.outputs[0].platform === 'shorts' && s.outputs[0].duration === 90);
+// formatos virais (17/11/2026)
+t('montagem com frase "eu fazendo qualquer coisa menos responder meu whatsapp"', (s, e) => s.mix[0].id === 'montagemfrase' && s.mix.length === 1 && s.texts[0].text.startsWith('eu fazendo') && s.texts[0].auto && e.fmt.musicOnly);
+t('clipe de letra "lately | I\'ve been | dreaming"', s => s.mix[0].id === 'letra' && s.texts[0].text === "lately | I've been | dreaming");
+t('tela dividida contando a história do Batistuta', (s, e) => s.mix[0].id === 'dividida' && e.fmt.layout === 'split');
+t('comentário com memes de 30 segundos pro tiktok', (s, e) => s.mix[0].id === 'memes' && e.fmt.layout === 'card' && s.outputs[0].platform === 'tiktok');
+t('história cinematográfica narrada', (s, e) => s.mix[0].id === 'historia' && e.captions.style === 'ambar' && e.slowPush > 0);
+t('conversa com sustos', s => s.mix[0].id === 'susto');
+t('edit de futebol phonk', (s, e) => s.mix[0].id === 'phonk' && e.fmt.bwDrop);
+t('vlog narrado com piada, frase "quando você percebe que tudo era ilusão"', (s, e) => s.mix[0].id === 'vlogpiada' && s.texts[0].auto && e.fmt.phrase === 'gancho');
 const base = interpret('reels estilo podcast').spec;
 t('corta mais rápido', (s, e) => e.pacing.avgShot < resolveStyle(base).pacing.avgShot, base);
 t('Gostei, mas deixa a música mais intensa e o final mais emocionante.', s => s.music.intensity > 0 && s.sections.some(x => x.from < 0) && s.mix[0].id === 'podcast', base);

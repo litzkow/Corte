@@ -18,6 +18,10 @@ export const LOOKS = {
   vibrant:    { label: 'Vibrante', exposure: 0.05, contrast: 1.12, saturation: 1.35, temp: 0.03, tint: 0, lift: [0, 0, 0], gamma: [1, 1, 1], gain: [1.02, 1.02, 1.02], fade: 0, vignette: 0.05, grain: 0 },
   punchy:     { label: 'Alto contraste', exposure: 0, contrast: 1.35, saturation: 1.05, temp: 0, tint: 0, lift: [-0.02, -0.02, -0.02], gamma: [1, 1, 1], gain: [1.03, 1.03, 1.03], fade: 0, vignette: 0.25, grain: 0.02 },
   bw:         { label: 'Preto e branco', exposure: 0, contrast: 1.2, saturation: 0, temp: 0, tint: 0, lift: [0, 0, 0], gamma: [1, 1, 1], gain: [1, 1, 1], fade: 0.03, vignette: 0.28, grain: 0.1 },
+  warmpop:    { label: 'Quente e vivo (reels)', exposure: 0.03, contrast: 1.12, saturation: 1.2, temp: 0.08, tint: 0.01, lift: [0, 0, 0], gamma: [1, 1, 1], gain: [1.05, 1.0, 0.93], fade: 0, vignette: 0.08, grain: 0 },
+  filme:      { label: 'Filme estético (granulado)', exposure: 0.02, contrast: 0.92, saturation: 0.9, temp: 0.1, tint: 0.01, lift: [0.06, 0.045, 0.03], gamma: [1.02, 1, 0.96], gain: [1.04, 1.0, 0.9], fade: 0.1, vignette: 0.16, grain: 0.15 },
+  docfilm:    { label: 'Documentário de cinema', exposure: -0.02, contrast: 1.06, saturation: 0.72, temp: -0.04, tint: 0, lift: [0.03, 0.04, 0.06], gamma: [1, 1, 1.02], gain: [1.0, 0.98, 0.95], fade: 0.06, vignette: 0.32, grain: 0.1 },
+  futebol:    { label: 'Futebol saturado', exposure: 0.01, contrast: 1.22, saturation: 1.25, temp: 0.03, tint: -0.01, lift: [-0.02, -0.02, -0.02], gamma: [1, 0.98, 1], gain: [1.03, 1.04, 1.0], fade: 0, vignette: 0.12, grain: 0 },
   none:       { label: 'Sem cor (original)', exposure: 0, contrast: 1, saturation: 1, temp: 0, tint: 0, lift: [0, 0, 0], gamma: [1, 1, 1], gain: [1, 1, 1], fade: 0, vignette: 0, grain: 0 },
 };
 
@@ -35,7 +39,50 @@ const base = {
   ending: { fade: true },
 };
 
+export const FORMAT_IDS = ['montagemfrase', 'letra', 'memes', 'dividida', 'historia', 'susto', 'phonk', 'vlogpiada'];
 export const PRESETS = {
+  // ===== FORMATOS VIRAIS (pesquisa de 17/11/2026, vídeos com 300 mil a 5,7 milhões de views) =====
+  // Cada formato é uma receita completa: layout, ritmo, frase, legenda, som e cor. Ver docs/tendencias.md.
+  montagemfrase: { short: 'Frase fixa, cortes na batida, só música', label: 'Montagem com frase', desc: 'Cortes na batida, close no rosto alternando, uma frase fixa em cima, só música e emenda no começo. O reel de funk e lifestyle.',
+    pacing: { avgShot: 1.8, minShot: 1.1, maxShot: 2.8, variation: 0.35, beatSync: true }, hook: { enabled: false },
+    transitions: { mix: { cut: 1 }, dur: 0 }, effects: { punchIn: 0.12 }, color: { look: 'warmpop', intensity: 0.9 },
+    music: { mood: 'upbeat', levelDb: -6, duckDb: -6 }, sfx: { density: 0, kinds: [] }, captions: { style: 'dinamico' }, ending: { fade: false },
+    fmt: { musicOnly: true, altClose: true, loop: true, phrase: 'frase', needsPhrase: true } },
+  letra: { short: 'Letra no centro, cor de filme, loop', label: 'Clipe de letra (estético)', desc: 'Frase pequena em serifa no centro, mudando a cada corte, cor de filme com granulado, ritmo das frases da música, loop.',
+    pacing: { avgShot: 1.6, minShot: 0.95, maxShot: 3.1, variation: 0.45, beatSync: true }, hook: { enabled: false },
+    transitions: { mix: { cut: 1 }, dur: 0 }, effects: { punchIn: 0.05 }, color: { look: 'filme', intensity: 0.95 },
+    music: { mood: 'reflective', levelDb: -6, duckDb: -6 }, sfx: { density: 0, kinds: [] }, captions: { style: 'calmo' }, ending: { fade: false },
+    fmt: { musicOnly: true, loop: true, phrase: 'letra', perCut: true, needsPhrase: true } },
+  memes: { short: 'Corte a cada segundo, memes e legenda amarela', label: 'Comentário com memes', desc: 'Corte a cada segundo, zero pausa, imagem em tela cheia alternando com card no fundo cinza, legenda amarela de contorno grosso.',
+    pacing: { avgShot: 1.0, minShot: 0.6, maxShot: 1.6, variation: 0.35, beatSync: false }, hook: { enabled: true, seconds: 2 }, silence: { remove: true, minLen: 0.25, pad: 0.04 },
+    transitions: { mix: { cut: 1 }, dur: 0 }, effects: { punchIn: 0.35 }, color: { look: 'vibrant', intensity: 0.85 },
+    music: { mood: 'upbeat', levelDb: -16, duckDb: -10 }, sfx: { density: 0.35, kinds: ['pop', 'whoosh'] }, captions: { style: 'meme' },
+    fmt: { layout: 'card', fullCover: true, captionY: 0.5 } },
+  dividida: { short: 'Imagens em cima, você embaixo', label: 'Tela dividida contando história', desc: 'Imagens em cima trocando a cada 1–2 s, quem narra embaixo, linha branca no meio, legenda amarelo-neon pulando. Futebol e história.',
+    pacing: { avgShot: 1.7, minShot: 1.0, maxShot: 2.6, variation: 0.35, beatSync: false }, hook: { enabled: false }, silence: { remove: true, minLen: 0.3, pad: 0.05 },
+    transitions: { mix: { cut: 1 }, dur: 0 }, effects: { punchIn: 0.2 }, color: { look: 'punchy', intensity: 0.85 },
+    music: { mood: 'epic', levelDb: -15, duckDb: -13 }, sfx: { density: 0.4, kinds: ['whoosh', 'impact'] }, captions: { style: 'neonsplit' }, ending: { fade: false },
+    fmt: { layout: 'split', fullCover: true, split: 0.62, captionY: 0.575, hardEnd: true, sfxOnCovers: 'whoosh' } },
+  historia: { short: 'Narração, zoom lento, palavra em âmbar', label: 'História cinematográfica', desc: 'Narração com imagens trocando nas palavras fortes, zoom lento em tudo, cor dessaturada com granulado, palavra acendendo em âmbar, boom nas viradas.',
+    pacing: { avgShot: 1.3, minShot: 0.8, maxShot: 1.9, variation: 0.35, beatSync: false }, hook: { enabled: false }, silence: { remove: true, minLen: 0.35, pad: 0.06 },
+    transitions: { mix: { cut: 1 }, dur: 0 }, effects: { punchIn: 0.1 }, color: { look: 'docfilm', intensity: 0.95 },
+    music: { mood: 'epic', levelDb: -18, duckDb: -16 }, sfx: { density: 0.3, kinds: ['boom', 'whoosh'] }, captions: { style: 'ambar' },
+    slowPush: 0.5, fmt: { fullCover: true, booms: true, captionY: 0.5 } },
+  susto: { short: 'Zoom na piada, clímax com boom', label: 'Conversa com sustos', desc: 'Quem fala no centro, zoom de 115% nas piadas, no clímax 125% com cor fria, tremor e boom. Legenda de uma palavra colorida em fonte de game.',
+    pacing: { avgShot: 1.4, minShot: 0.7, maxShot: 2.6, variation: 0.45, beatSync: false }, hook: { enabled: true, seconds: 2.5 }, silence: { remove: true, minLen: 0.3, pad: 0.05 },
+    transitions: { mix: { cut: 1 }, dur: 0 }, effects: { punchIn: 0.6, shake: 0.4 }, color: { look: 'vibrant', intensity: 0.75 },
+    music: { mood: 'dramatic', levelDb: -20, duckDb: -14 }, sfx: { density: 0.4, kinds: ['boom', 'glitch', 'whoosh'] }, captions: { style: 'pixel' },
+    emphasisZoom: true, fmt: { climax: true, captionY: 0.56 } },
+  phonk: { short: 'Drop em preto e branco, câmera lenta', label: 'Lance com batida (phonk)', desc: 'Tempo normal até o lance, pisca preto e branco no drop com tremor, replay em câmera lenta, cor saturada. Edit de futebol e esporte.',
+    pacing: { avgShot: 1.6, minShot: 0.6, maxShot: 3.5, variation: 0.55, beatSync: true }, hook: { enabled: false },
+    transitions: { mix: { cut: 0.85, flash: 0.15 }, dur: 0.12 }, effects: { punchIn: 0.3, slowmo: 0.3, speedRamp: true, shake: 0.5 }, color: { look: 'futebol', intensity: 0.95 },
+    music: { mood: 'electronic', levelDb: -10, duckDb: -6 }, sfx: { density: 0.3, kinds: ['impact', 'whoosh'] }, captions: { style: 'impact' },
+    fmt: { bwDrop: true, keepOriginal: -4 } },
+  vlogpiada: { short: 'Gancho em cima, boom na piada', label: 'Vlog narrado com piada', desc: 'Diálogo cortado a cada segundo, boom e zoom na piada, música só entra quando a história anda, frase-gancho em cima e legenda embaixo.',
+    pacing: { avgShot: 1.1, minShot: 0.6, maxShot: 2.2, variation: 0.4, beatSync: false }, hook: { enabled: false }, silence: { remove: true, minLen: 0.3, pad: 0.05 },
+    transitions: { mix: { cut: 1 }, dur: 0 }, effects: { punchIn: 0.4 }, color: { look: 'bright', intensity: 0.8 },
+    music: { mood: 'upbeat', levelDb: -17, duckDb: -10 }, sfx: { density: 0.25, kinds: ['boom', 'pop'] }, captions: { style: 'vlog' },
+    fmt: { punchline: true, musicEnter: 0.3, phrase: 'gancho', phraseSecs: 4 } },
   action: { label: 'Ação Hollywood', desc: 'Cortes curtos, impacto, som forte, tomadas heroicas mais longas de vez em quando.',
     pacing: { avgShot: 1.0, minShot: 0.4, maxShot: 2.8, variation: 0.55, beatSync: true }, hook: { enabled: true, seconds: 3 },
     transitions: { mix: { cut: 0.6, flash: 0.15, whip: 0.15, zoom: 0.1 }, dur: 0.18 },
@@ -162,6 +209,8 @@ for (const k of Object.keys(PRESETS)) {
     effects: { ...base.effects, ...p.effects }, color: { ...base.color, ...p.color }, music: { ...base.music, ...p.music },
     sfx: { ...base.sfx, ...p.sfx }, captions: { ...base.captions, ...p.captions }, ending: { ...base.ending, ...p.ending },
   };
+  // campos extras do preset (formato, zoom lento, zoom nas palavras...) seguem junto
+  for (const [kk, v] of Object.entries(p)) if (!(kk in PRESETS[k]) && !(kk in base)) PRESETS[k][kk] = v;
 }
 
 // Mistura ponderada de presets ("70% documentário, 30% ação").

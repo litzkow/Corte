@@ -201,9 +201,18 @@ export class Compositor {
     return true;
   }
   // layer = { el, crop:[x,y,w,h], fit, fitRect:[x,y,w,h], exp }
-  draw({ A, B, mix = 0, trans = 'cut', shake = [0, 0], flash = 0, look = 'natural', intensity = 0.8, grainOver = null, letterbox = 0, leak = 0, time = 0, skin = 1, adjust = null, mirror = false }) {
+  // pinta um retângulo de cor sólida (fundo do card, sombra). r = [x, y (de baixo), w, h] em pixels
+  fill(r, rgb) {
+    const gl = this.gl;
+    gl.enable(gl.SCISSOR_TEST); gl.scissor(r[0], r[1], r[2], r[3]);
+    gl.clearColor(rgb[0], rgb[1], rgb[2], 1); gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.disable(gl.SCISSOR_TEST);
+  }
+  draw({ A, B, mix = 0, trans = 'cut', shake = [0, 0], flash = 0, look = 'natural', intensity = 0.8, grainOver = null, letterbox = 0, leak = 0, time = 0, skin = 1, adjust = null, mirror = false, vp = null }) {
     const gl = this.gl, u = this.u;
-    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+    // vp = [x, y (de baixo), w, h]: desenha só num pedaço da tela (tela dividida, card)
+    const V = vp || [0, 0, this.canvas.width, this.canvas.height];
+    gl.viewport(V[0], V[1], V[2], V[3]);
     if (A && A.el) this.upload(0, A.el, !!A.fit);
     const hasB = !!(B && B.el);
     if (hasB) this.upload(1, B.el, !!B.fit);
@@ -224,7 +233,7 @@ export class Compositor {
     gl.uniform3f(u.uLift, ...L.lift); gl.uniform3f(u.uGamma, ...L.gamma); gl.uniform3f(u.uGain, ...L.gain);
     gl.uniform1f(u.uVignette, L.vignette * Math.min(1, intensity * 1.2)); gl.uniform1f(u.uGrain, a.grain != null ? a.grain : (grainOver != null ? grainOver : L.grain));
     gl.uniform1f(u.uIntensity, intensity); gl.uniform1f(u.uSkin, skin); gl.uniform1f(u.uTime, time);
-    gl.uniform1f(u.uLetterbox, letterbox); gl.uniform1f(u.uLeak, leak); gl.uniform1f(u.uMirror, mirror ? 1 : 0); gl.uniform1f(u.uSharp, a.sharpen || 0); const f1 = (n, v) => { if (u[n]) gl.uniform1f(u[n], v || 0); }; f1('uChroma', a.chroma); f1('uVHS', a.vhs); f1('uBloom', a.bloom); f1('uLens', a.lens); f1('uBlur', a.blur); f1('uShadows', a.shadows); f1('uHighlights', a.highlights); f1('uGlitchFx', a.glitch); f1('uBurn', 0); gl.uniform2f(u.uRes, this.canvas.width, this.canvas.height);
+    gl.uniform1f(u.uLetterbox, letterbox); gl.uniform1f(u.uLeak, leak); gl.uniform1f(u.uMirror, mirror ? 1 : 0); gl.uniform1f(u.uSharp, a.sharpen || 0); const f1 = (n, v) => { if (u[n]) gl.uniform1f(u[n], v || 0); }; f1('uChroma', a.chroma); f1('uVHS', a.vhs); f1('uBloom', a.bloom); f1('uLens', a.lens); f1('uBlur', a.blur); f1('uShadows', a.shadows); f1('uHighlights', a.highlights); f1('uGlitchFx', a.glitch); f1('uBurn', 0); gl.uniform2f(u.uRes, V[2], V[3]);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 }

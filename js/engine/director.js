@@ -48,6 +48,15 @@ const toSec = (n, u) => /^h/.test(u) ? n * 3600 : /^min/.test(u) ? n * 60 : n;
 
 // ---------- vocabulário ----------
 const STYLE_WORDS = [
+  // formatos virais (receitas completas): ganham dos estilos genéricos quando aparecem
+  ['montagemfrase', /\bmontagem com frase\b|\bfrase fixa\b|\b(reels?|montagem|edit) (de|com) funk\b|\bestilo funk\b/],
+  ['letra', /\bclipe de letra\b|\blyrics? (video|edit)\b|\bletra (pequena|no meio|no centro)\b|\bfrase por corte\b|\bestetica com letra\b/],
+  ['memes', /\b(comentario|video|edit|estilo) (com|de) memes?\b|\bcom memes\b|\bmeme edit\b/],
+  ['dividida', /\btela dividida\b|\bsplit ?screen\b|\bdividid[oa] (em|no) (dois|duas|meio)\b/],
+  ['historia', /\bhistoria (cinematografica|narrada)\b|\bstorytelling\b|\bnarrativa cinematografica\b/],
+  ['susto', /\b(conversa|video|stream|live) com sustos?\b|\bestilo (stream|streamer)\b|\bclipe de (stream|live)\b/],
+  ['phonk', /\bphonk\b|\blance com batida\b|\b(edit|edicao) de (futebol|lance|esporte)\b|\bvelocity edit\b/],
+  ['vlogpiada', /\bvlog (narrado|com piada|de humor|engracado)\b/],
   ['trailer', /\btrailer\b|\bteaser\b/],
   ['action', /\bacao\b|\baction\b|\bhollywood\b|\bexplosiv|\badrenalina\b|\bblockbuster\b/],
   ['cinematic', /\bcinematografic|\bcinematic\b|\bcinema\b|\bfilme\b(?! de viagem)|\bfilmic\b|\bvisualmente bonit|\bvisually beautiful\b/],
@@ -158,6 +167,9 @@ export function interpret(text, prev, ctx = {}) {
     if (styleHits.some(h => h.id === 'trailer') && styleHits.some(h => h.id === 'action')) styleHits = styleHits.map(h => h.id === 'action' ? { ...h, w: 0.5 } : h);
     // "social" genérico perde para estilos específicos
     if (styleHits.length > 1) styleHits = styleHits.filter(h => h.id !== 'social' || styleHits.length === 1);
+    // formato viral é receita completa: não mistura com estilo genérico
+    const fh = styleHits.find(h => PRESETS[h.id] && PRESETS[h.id].fmt);
+    if (fh) styleHits = [{ id: fh.id, w: 1 }];
     // "estilo doc com um pouco de acao"
     styleHits = styleHits.map(h => new RegExp(`\\bum pouco de\\s+\\w*\\s*${h.id === 'action' ? 'acao' : h.id}|a (bit|little) of\\s+\\w*\\s*${h.id}`).test(sStyle) ? { ...h, w: 0.3 } : h);
   }
@@ -406,7 +418,9 @@ export function interpret(text, prev, ctx = {}) {
   // ------ textos com forma e títulos ------
   const quoted = [...String(text).matchAll(/["“”']([^"“”']{1,80})["“”']/g)].map(x => x[1]);
   const shapeMap = [['circle', /\b(circul\w*|circle|redond\w*|girando em volta|em volta d[oa] (rosto|cabeca|pessoa)|around (the |my )?(face|head))/], ['arc', /\b(arco|arc|curv|curved)/], ['wave', /\b(onda|wave|ondulad|wavy)/], ['badge', /\b(selo|badge|sticker|adesivo|carimbo|stamp)/], ['spiral', /\b(espiral|spiral)/]];
-  const quotedTxt = [...String(text).matchAll(/["“”']([^"“”']{1,80})["“”']/g)].map(x => x[1]);
+  // aspas duplas primeiro (assim "I've" não quebra a frase); aspas simples só se não houver duplas
+  const dq = [...String(text).matchAll(/["“”]([^"“”]{1,240})["“”]/g)].map(x => x[1]);
+  const quotedTxt = dq.length ? dq : [...String(text).matchAll(/["“”']([^"“”']{1,80})["“”']/g)].map(x => x[1]);
   // --- texto na tela em bloco: serifa curvada, contorno branco, papel amassado ---
   const BLOCK_WORDS = [
     ['mensagem', /\b(imessage|mensage[mn]s?|conversa (de|no|do) (whats\w*|zap|iphone|celular)|baloes?( de mensagem)?|chat|whatsapp|zap|print de conversa)\b/],
@@ -430,15 +444,19 @@ export function interpret(text, prev, ctx = {}) {
   const bw = textWord && !shapeAsked ? BLOCK_WORDS.find(([, re]) => re.test(s)) : null;
   const blockAsk = /\b(texto|frase|escrita|escreve|escrever|escreva|letreiro|text|write)\b.{0,30}\b(na tela|no video|no meio|em cima do video|on screen|por cima)\b|\b(texto na tela|frase na tela|texto no meio)\b/.test(s);
   const isCaption = /\blegenda\b/.test(s) && !/\b(texto|frase)\b/.test(s);
-  if ((bw || (blockAsk && !shapeAsked)) && !isCaption && !/\bmanchete\b/.test(s)) {
+  // formato com frase (montagem com frase, clipe de letra, vlog com gancho): o texto entre aspas é a frase dele
+  const mainFmt = spec.mix && spec.mix[0] && PRESETS[spec.mix[0].id] && PRESETS[spec.mix[0].id].fmt;
+  const fmtPhraseAsk = quotedTxt.length && !shapeAsked && !isCaption && ((mainFmt && mainFmt.phrase) || /\b(frase|texto|escrito|escrita|letra)\b/.test(s));
+  if ((bw || (blockAsk && !shapeAsked) || fmtPhraseAsk) && !isCaption && !/\bmanchete\b/.test(s)) {
     const style = bw ? bw[0] : 'contorno';
-    const label = (TEXT_STYLES[style] ? TEXT_STYLES[style].label : style).toLowerCase();
+    const shownStyle = !bw && mainFmt && mainFmt.phrase ? mainFmt.phrase : style;
+    const label = (TEXT_STYLES[shownStyle] ? TEXT_STYLES[shownStyle].label : shownStyle).toLowerCase();
     const all = !/\b(primeiros (\d+ )?segundos|so no comeco|so no inicio|no comecinho|first seconds)\b/.test(s);
     const undoSaid = (re, fn) => { const i = said.findIndex(x => re.test(x)); if (i >= 0) { said.splice(i, 1); fn && fn(); } };
     if (style === 'mensagem') undoSaid(/^Estilo: /, () => { spec.mix = deepClone(prev ? prev.mix : spec.mix); });
     if (style === 'batida' && !/\b(corte|cortes|edicao|montagem)\b/.test(s)) undoSaid(/^Cortes sincronizados/, () => { if (over.pacing) { if (prev && prev.over && prev.over.pacing && prev.over.pacing.beatSync != null) over.pacing.beatSync = prev.over.pacing.beatSync; else delete over.pacing.beatSync; } });
     if (style === 'caixa' && /\bdo (tiktok|instagram)\b/.test(s)) undoSaid(/^Formato: /, () => { spec.outputs = deepClone(prev ? prev.outputs : spec.outputs); });
-    if (quotedTxt.length) { spec.texts.push({ shape: 'block', style, text: quotedTxt[0], all }); said.push(`Texto na tela em ${label}: "${quotedTxt[0]}"${all ? '' : ' (primeiros segundos)'}`); }
+    if (quotedTxt.length) { spec.texts.push({ shape: 'block', style, text: quotedTxt[0], all, ...(bw ? {} : { auto: true }) }); said.push(`Texto na tela em ${label}: "${quotedTxt[0]}"${all ? '' : ' (primeiros segundos)'}`); }
     else {
       const blk = spec.texts.filter(t => t.shape === 'block');
       if (blk.length && bw) { blk.forEach(t => { t.style = style; }); said.push(`Texto na tela agora em ${label}`); }
