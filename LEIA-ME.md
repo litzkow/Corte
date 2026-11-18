@@ -18,6 +18,14 @@ Tudo acontece no navegador do aparelho. Os vídeos não vão para servidor nenhu
   IA, Mídia, Estilo, Legendas, Texto, Áudio, Cor, Formato, Versões e Qualidade.
 - Tocando num corte da linha do tempo: Dividir, Velocidade, Transição, Congelar, Duração e Excluir.
 
+## Formatos que viralizam (versão 2.7)
+Receitas completas tiradas de vídeos que bombaram em nov/2026 (ver `docs/tendencias.md`). Peça pelo nome:
+- **Montagem com frase**: `montagem com frase "eu fazendo qualquer coisa menos responder o WhatsApp"`
+- **Clipe de letra**: `clipe de letra "lately | I've been | dreaming"` (frases separadas por |)
+- **Comentário com memes**, **Tela dividida contando história**, **História cinematográfica**,
+  **Conversa com sustos**, **Lance com batida (phonk)**, **Vlog narrado com piada**.
+A legenda é automática: com vídeo que tem fala, o app transcreve sozinho no aparelho (Whisper) e a legenda aparece quando fica pronta.
+
 ## O que funciona (testado)
 - Análise: silêncios e pausas, fala, batidas e BPM da música, trocas de cena, movimento, tremor,
   exposição, nitidez, rosto (para reenquadrar).

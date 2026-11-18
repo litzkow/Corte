@@ -344,23 +344,7 @@ export class Renderer {
   }
 
   // ----- quadro parado (para miniatura, conferência e linha do tempo) -----
-  // Avança o vídeo tocando até o quadro pedido (em vez de buscar): na exportação, quadro seguido de quadro
-  // fica muitas vezes mais rápido, porque buscar obriga a decodificar desde o último quadro-chave.
-  stepTo(el, want, fps) {
-    if (typeof el.requestVideoFrameCallback !== 'function' || el.seeking || el.readyState < 2) return Promise.resolve(false);
-    const d = want - el.currentTime;
-    if (!(d > 0.002 && d < 0.75)) return Promise.resolve(false);
-    return new Promise(res => {
-      let done = false;
-      const fin = ok => { if (done) return; done = true; clearTimeout(to); try { el.pause(); } catch (e) {} res(ok); };
-      const to = setTimeout(() => fin(false), 1500);
-      const tick = (now, meta) => { if (done) return; if (meta.mediaTime >= want - 0.6 / fps) fin(true); else el.requestVideoFrameCallback(tick); };
-      el.requestVideoFrameCallback(tick);
-      el.playbackRate = 1;
-      const p = el.play(); if (p && p.catch) p.catch(() => fin(false));
-    });
-  }
-  async frameAt(t, { step = 0 } = {}) {
+  async frameAt(t) {
     t = clamp(t, 0, this.plan.duration - 0.01);
     this.t = t;
     const active = this.segs.filter(s => t >= s.a0 && t < s.a1);
@@ -368,7 +352,6 @@ export class Renderer {
       const a = this.elFor(s, t);
       if (!a || a.still) continue;
       const want = srcTime(s, t);
-      if (step && s.speed !== 'freeze') { const ok = await this.stepTo(a.el, want, step); if (ok && Math.abs(a.el.currentTime - want) < 1.5 / step) { this.stats.steps = (this.stats.steps || 0) + 1; continue; } this.stats.stepMiss = (this.stats.stepMiss || 0) + 1; this._lastMiss = [ok, +(a.el.currentTime - want).toFixed(3)]; }
       a.el.pause();
       if (Math.abs(a.el.currentTime - want) > 0.01) a.el.currentTime = want;
       // espera a busca terminar (vários eventos servem; um vídeo já carregado não dispara "loadeddata" de novo)
@@ -470,18 +453,11 @@ export class Renderer {
     ve.configure({ codec: sup.video, width: W, height: H, bitrate, framerate: fps, avc: { format: 'avc' }, latencyMode: 'quality', bitrateMode: 'variable' });
     const N = Math.max(1, Math.round(this.plan.duration * fps));
     const t0 = performance.now();
-    // os vídeos precisam estar na página (invisíveis) para o navegador entregar quadros enquanto tocam
-    const holder = document.createElement('div');
-    Object.assign(holder.style, { position: 'fixed', left: '0', top: '0', width: '2px', height: '2px', overflow: 'hidden', opacity: '0.01', pointerEvents: 'none', zIndex: '-1' });
-    document.body.appendChild(holder);
-    const parked = [];
-    for (const list of this.pools.values()) for (const a of list) if (a.el && !a.still && !a.el.parentNode) { holder.appendChild(a.el); parked.push(a.el); }
-    try {
     for (let i = 0; i < N; i++) {
       if (signal && signal.aborted) { try { ve.close(); } catch (e) {} const er = new Error('cancelado'); er.cancelled = true; throw er; }
       if (err) throw err;
       const t = i / fps;
-      await this.frameAt(t, { step: fps });
+      await this.frameAt(t);
       const vf = new VideoFrame(this.out, { timestamp: Math.round(i * 1e6 / fps), duration: Math.round(1e6 / fps) });
       ve.encode(vf, { keyFrame: i % (fps * 2) === 0 });
       vf.close();
@@ -491,7 +467,6 @@ export class Renderer {
         onProgress((i + 1) / N * 0.95, { frame: i + 1, frames: N, etaSec: (N - i - 1) / Math.max(rate, 0.01) });
       }
     }
-    } finally { for (const v of parked) { try { v.pause(); } catch (e) {} v.remove(); } holder.remove(); }
     await ve.flush(); ve.close();
     if (err) throw err;
     // som

@@ -22,7 +22,7 @@ import { uid, deepClone, clamp, sleep } from './engine/util.js';
 import { icon } from './icons.js';
 import * as store from './store.js';
 
-export const APP_VERSION = '2.6', APP_DATE = '17/11/2026';
+export const APP_VERSION = '2.7', APP_DATE = '17/11/2026';
 
 const $ = s => document.querySelector(s);
 const el = (tag, attrs = {}, ...kids) => { const e = document.createElement(tag); for (const [k, v] of Object.entries(attrs)) { if (k === 'class') e.className = v; else if (k === 'html') e.innerHTML = v; else if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else if (v === true) e.setAttribute(k, ''); else if (v !== false && v != null) e.setAttribute(k, v); } for (const k of kids.flat()) if (k != null) e.append(k.nodeType ? k : document.createTextNode(String(k))); return e; };
