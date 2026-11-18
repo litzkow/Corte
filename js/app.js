@@ -13,7 +13,7 @@ import { Compositor } from './engine/gl.js';
 import { PRESETS, LOOKS, FORMAT_IDS } from './engine/styles.js';
 import { PLATFORMS } from './engine/platforms.js';
 import { CAPTION_STYLES, SHAPES, TEXT_STYLES, drawTextBlock, drawCaption, groupWords, markEmphasis, drawShape, ensureFonts, FONTS, googleFontsHref } from './engine/captions.js';
-import { alignScript, whisperTranscribe, whisperText } from './engine/transcribe.js';
+import { alignScript, whisperTranscribe, whisperText, LIGHT_DEVICE } from './engine/transcribe.js';
 import { checkPlan, checkExport, CAT_LABEL } from './engine/qc.js';
 import { dropAudioCache } from './engine/audio-mix.js';
 import { referenceProfile, applyReference } from './engine/reference.js';
@@ -22,15 +22,39 @@ import { uid, deepClone, clamp, sleep } from './engine/util.js';
 import { icon } from './icons.js';
 import * as store from './store.js';
 
-export const APP_VERSION = '2.7', APP_DATE = '17/11/2026';
+export const APP_VERSION = '2.8', APP_DATE = '17/11/2026';
 
 const $ = s => document.querySelector(s);
 const el = (tag, attrs = {}, ...kids) => { const e = document.createElement(tag); for (const [k, v] of Object.entries(attrs)) { if (k === 'class') e.className = v; else if (k === 'html') e.innerHTML = v; else if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else if (v === true) e.setAttribute(k, ''); else if (v !== false && v != null) e.setAttribute(k, v); } for (const k of kids.flat()) if (k != null) e.append(k.nodeType ? k : document.createTextNode(String(k))); return e; };
 const tc = (t, dec = true) => { t = Math.max(0, t || 0); const m = Math.floor(t / 60), s = t - m * 60; return String(m).padStart(2, '0') + ':' + (dec ? s.toFixed(1).padStart(4, '0') : String(Math.floor(s)).padStart(2, '0')); };
 document.head.append(el('link', { rel: 'stylesheet', href: googleFontsHref() }));
 
+// ---------------- registro de erros ----------------
+// Guarda os últimos erros e o que o app estava fazendo. Se o iPhone fechar a página no meio de algo pesado,
+// na próxima abertura dá para ver onde foi e mandar o relatório (Configurações → Relatório de erros).
+const ERRK = 'corte.errlog', DOINGK = 'corte.doing';
+function logErr(kind, msg, extra = '') {
+  try {
+    const list = JSON.parse(localStorage.getItem(ERRK) || '[]');
+    list.push({ at: new Date().toISOString(), kind, msg: String(msg).slice(0, 300), extra: String(extra).slice(0, 600), doing: localStorage.getItem(DOINGK) || '' });
+    localStorage.setItem(ERRK, JSON.stringify(list.slice(-25)));
+  } catch (e) {}
+}
+function doing(what) { try { if (what) localStorage.setItem(DOINGK, what + ' · ' + new Date().toLocaleTimeString('pt-BR')); else localStorage.removeItem(DOINGK); } catch (e) {} }
+window.addEventListener('error', e => logErr('erro', e.message, (e.error && e.error.stack) || `${e.filename}:${e.lineno}`));
+window.addEventListener('unhandledrejection', e => logErr('promessa', (e.reason && e.reason.message) || e.reason, e.reason && e.reason.stack));
+let crashedLast = null;
+try { crashedLast = localStorage.getItem(DOINGK); if (crashedLast) { logErr('fechou', 'O app fechou ou recarregou sozinho no meio de: ' + crashedLast); localStorage.removeItem(DOINGK); } } catch (e) {}
+function errReport() {
+  let list = []; try { list = JSON.parse(localStorage.getItem(ERRK) || '[]'); } catch (e) {}
+  const mem = navigator.deviceMemory ? navigator.deviceMemory + ' GB' : '?';
+  return [`Corte ${APP_VERSION} (${APP_DATE})`, navigator.userAgent, `Memória: ${mem} · Tela de Início: ${isStandalone() ? 'sim' : 'não'} · Voz do navegador: ${SRclass() ? 'sim' : 'não'}`, '',
+    ...list.slice(-15).map(x => `${x.at.slice(5, 16).replace('T', ' ')} [${x.kind}] ${x.msg}${x.doing ? ' (fazendo: ' + x.doing + ')' : ''}${x.extra ? '\n   ' + x.extra.split('\n').slice(0, 3).join('\n   ') : ''}`)].join('\n');
+}
+
 // ---------------- estado ----------------
-const prefs = Object.assign({ format: 'reels', voiceLang: 'pt-BR', voiceEngine: 'auto', autoCaptions: true }, store.loadPrefs());
+const prefs = Object.assign({ format: 'reels', voiceLang: 'pt-BR', voiceEngine: 'auto' }, store.loadPrefs());
+if (prefs.autoCap == null) prefs.autoCap = !LIGHT_DEVICE;   // no iPhone, só quando a pessoa ligar
 const S = {
   project: null, sources: [], music: null, musicA: null, ref: null, refPending: false, items: new Map(),
   versions: [], cur: -1, transcript: {}, pendingStyle: null,
@@ -47,7 +71,8 @@ const getSrc = id => S.sources.find(s => s.id === id) || (S.music && S.music.id 
 const footage = () => S.sources.filter(s => ((s.kind === 'video' || s.kind === 'image') && s.role === 'footage') || s.role === 'voice');
 const itemsNow = () => footage().map(s => S.items.get(s.id)).filter(Boolean);
 
-function toast(msg, ms = 2800) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), ms); }
+function toast(msg, ms = 2800) {
+  if (/^(Deu erro|Não consegui|Falhou|A transcrição|Erro)/.test(String(msg))) logErr('aviso', msg); const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), ms); }
 
 // =====================================================================
 // INÍCIO
@@ -161,7 +186,7 @@ async function addFiles(files, { role } = {}) {
   let added = 0, k = 0;
   if (files.length > 1) toast(`Abrindo ${files.length} arquivos…`, 2500);
   for (const f of files) {
-    k++;
+    k++; doing(`abrindo o arquivo "${f.name}" (${(f.size / 1e6).toFixed(0)} MB)`);
     const errs = validateFile(f);
     if (errs.length) { toast(errs[0], 4500); continue; }
     try {
@@ -179,15 +204,15 @@ async function addFiles(files, { role } = {}) {
       renderAll();   // cada arquivo aparece assim que abre, sem esperar os outros
     } catch (e) { toast(`Não consegui abrir "${f.name}": ${e.message}`, 5000); }
   }
-  renderAll(); autosave();
+  doing(null); renderAll(); autosave();
   if (added && !curV()) setTimeout(() => $('#aiInput').focus(), 200);
-  analyzeAll().then(autoTranscribe).catch(() => {});
+  analyzeAll().then(autoTranscribe).catch(e => logErr('análise', e.message || e));
 }
 // Legenda automática: quando entra vídeo com fala, transcreve sozinho em segundo plano (Whisper no aparelho).
 // A edição não espera: quando a transcrição fica pronta, a prévia ganha legenda sem mudar o resto.
 const trTried = new Set(); let trRunning = false;
 async function autoTranscribe() {
-  if (!prefs.autoCaptions || trRunning) return;
+  if (!prefs.autoCap || trRunning) return;
   const ids = footage().map(s => s.id).filter(id => { const it = S.items.get(id); return it && it.audio && it.audio.speechRatio > 0.3 && !S.transcript[id] && !trTried.has(id) && it.src.duration < 20 * 60; });
   if (!ids.length) return;
   trRunning = true;
@@ -197,13 +222,13 @@ async function autoTranscribe() {
   try {
     for (const id of ids) {
       trTried.add(id);
-      show('Legendando…');
+      show('Legendando…'); doing('transcrevendo a fala para a legenda');
       const res = await whisperTranscribe(getSrc(id), { language: lang, onProgress: e => show(e.stage === 'modelo' ? `Preparando a legenda (só na 1ª vez) ${Math.round((e.p || 0) * 100)}%` : `Legendando "${getSrc(id).name.slice(0, 18)}"…`) });
       if (res.words.length) { S.transcript[id] = { words: res.words, from: 'whisper' }; done++; }
     }
   } catch (e) {
     console.warn(e); toast('Não consegui legendar sozinho agora (na primeira vez precisa de internet). Dá para tentar em Legendas.', 6000);
-  } finally { trRunning = false; show(''); }
+  } finally { trRunning = false; show(''); doing(null); }
   if (done) { autosave(); refreshWithTranscript(); }
 }
 function refreshWithTranscript() {
@@ -236,8 +261,10 @@ async function analyzeAll(onStage) {
   analyzing = (async () => {
     for (const s of [...footage(), ...(S.ref ? [S.ref] : [])]) {
       if (S.items.has(s.id)) continue;
+      doing(`analisando "${s.name}" (${(s.size / 1e6).toFixed(0)} MB, ${Math.round(s.duration)} s)`);
       S.items.set(s.id, await analyzeSource(s, ev => onStage && onStage(ev)));
     }
+    doing(null);
     if (S.music && !S.musicA) { S.musicA = S.libA.get(S.music.id) || await analyzeMusicSource(S.music, onStage); S.libA.set(S.music.id, S.musicA); }
   })();
   try { await analyzing; } finally { analyzing = null; }
@@ -896,8 +923,10 @@ function settingsSheet() {
   const styles = store.loadStyles();
   openSheet('Ajustes', null,
     label('Idioma da voz'), el('div', { class: 'chips' }, ...[['pt-BR', 'Português'], ['en-US', 'Inglês']].map(([k, l]) => el('button', { class: 'chip' + (prefs.voiceLang === k ? ' on' : ''), onclick: () => { prefs.voiceLang = k; store.savePrefs(prefs); settingsSheet(); } }, l))),
-    label('Legenda automática'), el('div', { class: 'chips' }, ...[[true, 'Ligada'], [false, 'Desligada']].map(([k, l]) => el('button', { class: 'chip' + (prefs.autoCaptions === k ? ' on' : ''), onclick: () => { prefs.autoCaptions = k; store.savePrefs(prefs); settingsSheet(); if (k) autoTranscribe(); } }, l))),
-    el('p', { class: 'muted' }, 'Ligada: quando entra vídeo com fala, o app transcreve sozinho no aparelho e põe legenda. Na primeira vez baixa o reconhecimento (uns 75 MB).'),
+    label('Relatório de erros'), el('p', { class: 'muted' }, 'Se algo der erro ou o app fechar sozinho, toque aqui e cole o relatório na conversa com o Claude.'),
+    el('button', { class: 'btn', onclick: async () => { const r = errReport(); try { await navigator.clipboard.writeText(r); toast('Relatório copiado. Cole na conversa.'); } catch (e) { const ta = el('textarea', { rows: '10' }); ta.value = r; openSheet('Relatório de erros', 'Selecione tudo e copie.', ta); } } }, 'Copiar relatório de erros'),
+    label('Legenda automática'), el('div', { class: 'chips' }, ...[[true, 'Ligada'], [false, 'Desligada']].map(([k, l]) => el('button', { class: 'chip' + (prefs.autoCap === k ? ' on' : ''), onclick: () => { prefs.autoCap = k; store.savePrefs(prefs); settingsSheet(); if (k) autoTranscribe(); } }, l))),
+    el('p', { class: 'muted' }, LIGHT_DEVICE ? 'No iPhone vem desligada: transcrever pesa e o Safari pode fechar a página. Ligue para testar; se fechar, desligue de novo. Dá para legendar colando o texto em Legendas.' : 'Ligada: quando entra vídeo com fala, o app transcreve sozinho no aparelho e põe legenda. Na primeira vez baixa o reconhecimento (uns 75 MB).'),
     label('Microfone'), el('div', { class: 'chips' }, ...[['auto', 'Ao vivo (do navegador)'], ['record', 'Gravar e transcrever no aparelho']].map(([k, l]) => el('button', { class: 'chip' + (prefs.voiceEngine === k ? ' on' : ''), onclick: () => { prefs.voiceEngine = k; store.savePrefs(prefs); settingsSheet(); } }, l))),
     el('p', { class: 'muted' }, 'Ao vivo mostra o texto enquanto você fala. Se ele cortar ou não entender, use "Gravar e transcrever": grava tudo e transcreve aqui mesmo (na primeira vez baixa o reconhecimento, uns 75 MB).'),
     label('Meus estilos (toque para apagar)'), styles.length ? el('div', { class: 'chips' }, ...styles.map(s => el('button', { class: 'chip', onclick: () => { store.saveStyles(store.loadStyles().filter(x => x.name !== s.name)); settingsSheet(); } }, s.name + ' ×'))) : el('p', { class: 'muted' }, 'Depois de gostar de um resultado, diga "salva esse estilo".'),
@@ -951,8 +980,19 @@ function voiceOpen(onDone) {
   Object.assign(V, { on: true, committed: '', fin: '', mid: '', onDone, t0: Date.now(), fastEnds: 0, working: false, chunks: [], recSecs: 0 });
   const w = voiceEl(); w.hidden = false; w.querySelector('.v-time').textContent = '0:00';
   clearInterval(V.tick); V.tick = setInterval(() => { const s = Math.floor((Date.now() - V.t0) / 1000); w.querySelector('.v-time').textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }, 500);
-  const useRecord = prefs.voiceEngine === 'record' || !SRclass() || (isIOS && isStandalone());
-  if (useRecord) recordStart(); else liveStart();
+  const noLive = !SRclass() || (isIOS && isStandalone());
+  if (prefs.voiceEngine === 'record') recordStart();
+  else if (noLive && isIOS) keyboardDictation();
+  else if (noLive) recordStart();
+  else liveStart();
+}
+// iPhone sem reconhecimento do navegador (app na Tela de Início): o microfone do teclado da Apple funciona sempre,
+// não corta e não pesa. Fecha o painel e abre o teclado com uma dica de onde tocar.
+function keyboardDictation(note) {
+  const w = voiceEl(); const cb = V.onDone; const txt = joinTxt(V.committed, V.fin, V.mid);
+  V.on = false; V.onDone = null; clearInterval(V.tick); w.hidden = true;
+  if (cb) cb(txt, false);
+  toast(note || 'Toque no microfone do teclado (embaixo, à direita) e fale. Ele não corta. Depois toque em enviar.', 6500);
 }
 // --- motor 1: reconhecimento ao vivo ---
 function liveStart() {
@@ -974,6 +1014,8 @@ function liveStart() {
     if (er === 'not-allowed' && Date.now() - V.t0 < 1500) { V.rec = null; voiceClose('cancel'); toast('Permita o microfone para o site nas configurações do Safari/Chrome.', 5000); return; }
     // serviço indisponível, sem internet, sem permissão para reiniciar sozinho: grava e transcreve aqui
     V.rec = null; commitLive(); try { r.abort(); } catch (x) {}
+    logErr('voz', 'reconhecimento do navegador: ' + er);
+    if (isIOS && prefs.voiceEngine !== 'record') return keyboardDictation('O reconhecimento de voz do Safari falhou. Use o microfone do teclado: ele não corta.');
     recordStart(er === 'network' ? 'O reconhecimento do navegador precisa de internet. Gravando para transcrever no aparelho.' : 'O reconhecimento do navegador falhou. Continuo gravando e transcrevo no aparelho.');
   };
   r.onend = () => {
@@ -983,7 +1025,7 @@ function liveStart() {
     if (!V.on || V.mode !== 'live') return;
     // o navegador parou sozinho (pausa na fala): volta a ouvir sem a pessoa perceber
     if (Date.now() - V.lastStart < 1200) V.fastEnds++;
-    if (V.fastEnds >= 6) return recordStart('O navegador fica parando de ouvir. Gravando para transcrever no aparelho.');
+    if (V.fastEnds >= 6) { logErr('voz', 'reconhecimento parando sozinho sem ouvir'); return isIOS && prefs.voiceEngine !== 'record' ? keyboardDictation('O Safari está parando de ouvir. Use o microfone do teclado: ele não corta.') : recordStart('O navegador fica parando de ouvir. Gravando para transcrever no aparelho.'); }
     setTimeout(() => { if (V.on && V.mode === 'live' && !V.rec) liveStart(); }, 150);
   };
   try { V.lastStart = Date.now(); r.start(); } catch (e) { V.rec = null; setTimeout(() => { if (V.on && V.mode === 'live' && !V.rec) liveStart(); }, 400); }
@@ -1048,7 +1090,7 @@ async function voiceClose(how) {
   if (V.mode === 'record') {
     const blob = await recordStopRaw();
     if (blob && V.recSecs > 0.4) {
-      V.working = true; voicePaint('Entendendo o que você falou…');
+      V.working = true; voicePaint('Entendendo o que você falou…'); doing('transcrevendo o pedido falado');
       try {
         const lang = String(prefs.voiceLang).startsWith('pt') ? 'portuguese' : 'english';
         const t = await whisperText(blob, V.recSecs, { language: lang, onProgress: ev => { if (ev.stage === 'modelo') voicePaint(ev.p ? `Preparando o reconhecimento (só na 1ª vez): ${Math.round(ev.p * 100)}%` : 'Preparando o reconhecimento (só na 1ª vez)…'); else voicePaint('Entendendo o que você falou…'); } });
@@ -1057,7 +1099,7 @@ async function voiceClose(how) {
         console.warn(e); V.working = false;
         if (!text.trim()) { V.on = false; w.hidden = true; V.onDone = null; toast('Não consegui transcrever (na primeira vez precisa de internet para baixar o reconhecimento). Tente de novo ou use o microfone do teclado.', 6500); return; }
       }
-      V.working = false;
+      V.working = false; doing(null);
     }
   }
   V.on = false; w.hidden = true;
@@ -1157,4 +1199,5 @@ function bind() {
 }
 
 bind(); showHome(); store.askPersist();
-window.__corte = { S, refreshWithTranscript, autoTranscribe, diagnosticsSheet, runEdit, addFiles, exportSheet, showVersion, togglePlay, seekTo, newProject, openProject, changeSpec, aiSheet, captionsSheet, colorSheet, audioSheet, textSheet, styleSheet, mediaSheet, formatSheet, qualitySheet, versionsSheet };
+if (crashedLast) setTimeout(() => toast(`Da última vez o app fechou sozinho (${crashedLast.split(' · ')[0]}). Se puder, copie o relatório em Configurações e mande para o Claude.`, 8000), 900);
+window.__corte = { S, errReport, logErr, refreshWithTranscript, autoTranscribe, diagnosticsSheet, runEdit, addFiles, exportSheet, showVersion, togglePlay, seekTo, newProject, openProject, changeSpec, aiSheet, captionsSheet, colorSheet, audioSheet, textSheet, styleSheet, mediaSheet, formatSheet, qualitySheet, versionsSheet };

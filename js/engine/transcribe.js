@@ -32,6 +32,11 @@ export function alignScript(text, speech) {
 }
 
 // Whisper no aparelho.
+// iPhone/iPad e aparelhos com pouca memória: modelo pequeno (tiny) e sem WebGPU. O modelo maior pela placa de
+// vídeo estoura a memória do Safari no iPhone e a página recarrega sozinha ("volta para o início").
+const IOS = typeof navigator !== 'undefined' && (/iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent)));
+export const LIGHT_DEVICE = IOS || (typeof navigator !== 'undefined' && navigator.deviceMemory && navigator.deviceMemory <= 4);
+const DEFAULT_MODEL = LIGHT_DEVICE ? 'onnx-community/whisper-tiny' : 'onnx-community/whisper-base';
 let pipe = null, loading = null;
 async function getPipe(model, onProgress) {
   if (pipe) return pipe;
@@ -39,7 +44,7 @@ async function getPipe(model, onProgress) {
     onProgress({ stage: 'modelo', p: 0, label: 'Baixando o modelo de transcrição (só na primeira vez)' });
     const mod = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.2');
     mod.env.allowLocalModels = false;
-    const device = navigator.gpu ? 'webgpu' : 'wasm';
+    const device = navigator.gpu && !LIGHT_DEVICE ? 'webgpu' : 'wasm';
     return await mod.pipeline('automatic-speech-recognition', model, {
       device, dtype: device === 'webgpu' ? 'fp32' : 'q8',
       progress_callback: e => { if (e.status === 'progress' && e.total) onProgress({ stage: 'modelo', p: e.loaded / e.total, label: 'Baixando o modelo de transcrição' }); },
@@ -48,7 +53,7 @@ async function getPipe(model, onProgress) {
   try { pipe = await loading; return pipe; } catch (e) { loading = null; throw e; }
 }
 // Pedido falado curto (gravado pelo microfone): devolve só o texto.
-export async function whisperText(blob, seconds, { language = null, model = 'onnx-community/whisper-base', onProgress = () => {} } = {}) {
+export async function whisperText(blob, seconds, { language = null, model = DEFAULT_MODEL, onProgress = () => {} } = {}) {
   const p = await getPipe(model, onProgress);
   onProgress({ stage: 'transcrevendo', p: 0, label: 'Entendendo o que você falou' });
   const bytes = await blob.arrayBuffer();
@@ -57,7 +62,7 @@ export async function whisperText(blob, seconds, { language = null, model = 'onn
   const res = await p(mixToMono(ab), { chunk_length_s: 30, stride_length_s: 5, ...(language ? { language, task: 'transcribe' } : {}) });
   return String(res.text || '').trim();
 }
-export async function whisperTranscribe(src, { language = null, model = 'onnx-community/whisper-base', onProgress = () => {} } = {}) {
+export async function whisperTranscribe(src, { language = null, model = DEFAULT_MODEL, onProgress = () => {} } = {}) {
   pipe = await getPipe(model, onProgress);
   onProgress({ stage: 'transcrevendo', p: 0, label: `Transcrevendo "${src.name}"` });
   const ab = await decodeAudio(src, 16000, 1);
