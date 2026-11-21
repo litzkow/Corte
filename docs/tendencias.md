@@ -51,3 +51,36 @@ O que se repete (é isso que o Corte precisa fazer de fábrica):
 Conclusão: o Corte tinha estilos com nome de "tipo de vídeo profissional" (casamento, corporativo, reportagem) e quase
 nunca mostrava legenda (só depois de transcrever à mão). Por isso saía "sem vida". O que viraliza hoje é FORMATO
 (layout + frase + ritmo + legenda + som), e quase todo formato com fala tem legenda.
+
+## 21/11/2026 — versão 2.9
+Pesquisa das últimas 2–4 semanas (listas semanais datadas de 13 a 21/11/2026):
+later.com (Instagram Reels trends, atualizado 20/11), newengen.com (Instagram trends 20/11 e TikTok trends 16/11),
+socialbee.com (latest Instagram trends, 19/11), socialpilot.co (TikTok trends, 17/11), postdom.com (TikTok trends 16–22/11),
+virlo.ai (TikTok trends de novembro, 21/11). Conferido também: capcut.com, manychat.com, blog.mean.ceo, socialmediatoday.com
+(novidades do Edits) — sem nada novo datado desse período.
+
+Entrou:
+- **Retrospectiva do ano** (formato): "I feel like I haven't done much this year" — frase de abertura e um clipe por mês
+  com o nome do mês grande, cortes de ~1 s na batida, só música. Meses em ordem; com menos de 12 cortes, pula meses de forma regular.
+- **Ultimamente no cartão SD** (formato): "Lately on my SD card" — cartão de memória desenhado (genérico, sem marca)
+  e depois 8 a 15+ clipes de menos de 1 s.
+- **Rótulo por corte** (texto): "Day 1 / Month 6 / 1 Year", "then and now" com anos — um rótulo grande por corte.
+- **Horário do vlog** (texto): "vlog timestamps" / "appointment timestamps" — um horário por corte, pílula escura com ponto vermelho.
+- **Lista aparecendo** (texto): "Some bills are non-negotiable. The bills:", "Major cheat code in life:", "It's NO-vember" —
+  título numa caixa branca e itens entrando um por corte.
+- **Transição de ventilador**: imita a pá do ventilador passando na frente da câmera (feito no shader; o efeito de verdade é físico).
+- **Transição de papel rasgando**: o "wrapping paper reveal" de fim de ano — a imagem é rasgada com borda de papel e sombra.
+- **Confete com palmas**: "boom clap confetti pop" — dois canhões de confete e palmas com bumbo.
+- **Sons**: palmas, sinos de Natal (síntese FM + guizos) e papel rasgando, todos gerados por código.
+- Folha Áudio com os efeitos sonoros para ouvir e colocar no ponto da prévia; folha Texto com o confete.
+- O diretor entende "vlog, 15 segundos" / "retrospectiva do ano, 15 segundos" (antes ignorava a duração depois da vírgula)
+  e "um boom no 0:03" (antes virava "1 boom" em lugar qualquer).
+
+Não deu (ou não faz sentido no app):
+- **Sons e músicas da moda** ("My Moon My Man" do Finneas, "Coming Up Roses", "Last Christmas", "Housewife", "Time" do Pink Floyd,
+  "Pray For Me"): são músicas com direitos autorais; o app não pode embutir. A pessoa pode usar a própria música (Áudio).
+- **Transição de roupa sem corte** (outfit transition, câmera parada e um movimento repetido) e **transição de ventilador de verdade**:
+  dependem de como a pessoa grava; o app só imita a passagem da pá.
+- **"Paid Me No Mind" (lip-sync repetindo a frase)** e **"My reaction" (ranking com caretas)**: formatos de atuação, não de edição.
+- **Texto atrás da pessoa**: continua precisando de recorte da pessoa quadro a quadro (segmentação), que o app não tem.
+- Nenhuma mudança de recurso do Edits, TikTok ou Shorts datada desse período apareceu nas fontes (as do Edits são de jan e jul/2026).

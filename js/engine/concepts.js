@@ -153,11 +153,12 @@ const MOOD_WORDS = [
   ['electronic', /\b(eletronic[oa]|electronic|edm|techno|house|synth)\b/], ['atmospheric', /\b(calm[oa]|relaxante|relaxing|ambient|lofi|lo-fi|tranquil[oa]|chill|suave)\b/],
   ['reflective', /\b(reflexiv[oa]|inspirador\w*|inspirational|acustic[oa]|acoustic|documentari\w*|corporate)\b/],
 ];
-const SFX_WORDS = [['boom', /\b(boom|bum|explosao|cinematic boom|estrondo)\b/], ['whoosh', /\b(whoosh|vush|swoosh)\b/], ['riser', /\b(riser|subida|tensao subindo)\b/],
-  ['impact', /\b(impacto|impact|hit|pancada|batida forte)\b/], ['pop', /\b(pop|ploc)\b/], ['click', /\b(clique|click)\b/], ['ding', /\b(ding|sino|plim)\b/],
+const SFX_WORDS = [['clap', /\b((?:palma|palmas)|(?:aplauso|aplausos)|(?:clap|claps)|bater (?:palma|palmas)|batendo (?:palma|palmas))\b/], ['sinos', /\b((?:sino|sinos) de natal|(?:sininho|sininhos) de natal|jingle (?:bell|bells)|(?:guizo|guizos)|sleigh (?:bell|bells)|som de natal|sinos natalinos)\b/],
+  ['rasgo', /\b(som de (papel )?rasgando|papel rasgando|rasgad[oa]|paper (tear|rip)|ripping|rasgo)\b/], ['boom', /\b(boom|bum|explosao|cinematic boom|estrondo)\b/], ['whoosh', /\b(whoosh|vush|swoosh)\b/], ['riser', /\b(riser|subida|tensao subindo)\b/],
+  ['impact', /\b(impacto|impact|hit|pancada|batida forte)\b/], ['pop', /\b(pop|ploc)\b/], ['click', /\b(clique|click)\b/], ['ding', /\b(ding|sino|sininho|plim)\b/],
   ['camera', /\b(som de camera|camera shutter|obturador|foto tirada)\b/], ['notify', /\b(notificac\w*|notification|alerta)\b/], ['drop', /\b(drop|queda)\b/],
   ['swish', /\b(swish|fsss)\b/], ['tension', /\b(suspense|tensao|tension|drone)\b/], ['glitch', /\b(som de glitch|glitch sound)\b/]];
-const TRANS_WORDS = [['dissolve', /\b(fusao|dissolv\w*|cross ?dissolve|crossfade|fade)\b/], ['whip', /\b(chicote|whip)\b/], ['zoom', /\b(zoom)\b/], ['blur', /\b(desfoque|blur)\b/],
+const TRANS_WORDS = [['fan', /\b(ventilador|fan|helice|pas girando)\b/], ['rasgo', /\b(rasg\w*|papel rasgado|papel de presente|presente|embrulho|wrapping( paper)?|paper (tear|rip)|tear|rip)\b/], ['dissolve', /\b(fusao|dissolv\w*|cross ?dissolve|crossfade|fade)\b/], ['whip', /\b(chicote|whip)\b/], ['zoom', /\b(zoom)\b/], ['blur', /\b(desfoque|blur)\b/],
   ['spin', /\b(giro|girando|spin|rotac\w*)\b/], ['glitch', /\b(glitch)\b/], ['burn', /\b(queima de filme|film burn|burn)\b/], ['flash', /\b(flash|clarao)\b/],
   ['slide', /\b(slide|empurr\w*|deslizar|push)\b/], ['mask', /\b(mascara|mask|circulo|iris)\b/], ['dip', /\b(mergulho|preto|dip to black)\b/], ['cut', /\b(corte seco|hard cut|sem transic\w*)\b/]];
 
@@ -220,14 +221,21 @@ export function parseClause(cl, ctx = {}, prevScope = null) {
   const sfx = findIn(SFX_WORDS, cl);
   const sfxRe = (SFX_WORDS.find(x => x[0] === sfx) || [])[1];
   const single = sfxRe && new RegExp('\\b(um|uma|a|an|one|o)\\s+(\\w+\\s+){0,2}(' + sfxRe.source.replace(/^\\b\(|\)\\b$/g, '') + ')').test(cl);
-  if (sfx && (single || (sc && sc.label)) && !/\b(sem|nos|nas|todos|todas|varios|uns|umas|\d+)\b/.test(cl) && !T.transition.test(cl)) {
+  // confete ("boom clap"): estoura no momento pedido, com palmas; sem momento, no final
+  const confetti = /\b((?:confete|confetes)|confetti|chuva de (papel|papeizinhos|papel picado)|papel picado|boom clap|canhao de confete)\b/.test(cl);
+  if (confetti) {
+    const at = sc ? (sc.point != null ? sc.point : sc.from === 'mid' ? -0.5 : sc.from < 0 ? -2.8 : sc.from) : -2.8;
+    out.push({ id: 'CONFETTI', own: true, params: neg && !/\b(com|with)\b/.test(cl) ? { on: false } : { at, on: true }, scope: null });
+  }
+  const clNoTime = cl.replace(/\b\d+:\d+\b|\b\d+(\.\d+)?\s*(s|seg\w*|segundos?|seconds?|secs?)\b/g, ' ');   // horário não é quantidade
+  if (sfx && !(confetti && sfx === 'clap') && (single || (sc && sc.label)) && !/\b(sem|nos|nas|todos|todas|varios|uns|umas|\d+)\b/.test(clNoTime) && !T.transition.test(cl)) {
     const at = sc ? (sc.point != null ? sc.point : sc.from === 'mid' ? -0.5 : sc.from < 0 ? -1 : sc.from) : 0;
     out.push({ id: 'ADD_SFX', own: true, params: { kind: sfx, at } });
   }
   // transição por nome ("transições de giro")
   if (T.transition.test(cl) && !out.some(a => /TRANSITION/.test(a.id))) {
     const tr = findIn(TRANS_WORDS, cl);
-    if (tr && !/\b(suave|smooth)/.test(cl)) out.push({ id: 'SET_TRANSITION_STYLE', own: true, params: { type: tr, share: 0.6, dur: tr === 'dissolve' || tr === 'dip' || tr === 'burn' ? 0.5 : 0.25 } });
+    if (tr && !/\b(suave|smooth)/.test(cl)) out.push({ id: 'SET_TRANSITION_STYLE', own: true, params: { type: tr, share: 0.6, dur: tr === 'dissolve' || tr === 'dip' || tr === 'burn' ? 0.5 : tr === 'rasgo' ? 0.55 : tr === 'fan' ? 0.4 : 0.25 } });
   }
   // perfil inteiro ("como um documentário profissional")
   const prof = findIn(PROFILE_WORDS, cl);

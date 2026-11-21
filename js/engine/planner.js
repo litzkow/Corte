@@ -5,7 +5,7 @@ import { makeFormat } from './platforms.js';
 import { bestMusicWindow, HOP_S } from './analyze-audio.js';
 import { smoothPath } from './analyze-video.js';
 import { clamp, mulberry32, uid, mergeIntervals, totalLen, invertIntervals } from './util.js';
-import { markEmphasis as markEmph } from './captions.js';
+import { markEmphasis as markEmph, TEXT_STYLES, MONTHS_PT } from './captions.js';
 import { findFillers } from './transcribe.js';
 
 const avgOver = (arr, a, b) => { const i0 = Math.max(0, Math.floor(a / HOP_S)), i1 = Math.min(arr.length, Math.ceil(b / HOP_S)); let s = 0; for (let i = i0; i < i1; i++) s += arr[i]; return i1 > i0 ? s / (i1 - i0) : 0; };
@@ -500,6 +500,12 @@ export function buildPlan({ spec, items, music, outputIndex = 0, seed = 1, trans
   if (shakeAmt > 0) for (const e of events) if (e.strength > 0.5) fx.push({ kind: 'shake', t: e.t, dur: 0.3, amt: shakeAmt * e.strength });
 
   // ---------- áudio ----------
+  // confete do "boom clap" (pedido): estoura num momento e cai por ~2,6 s; a palma vem pelo pedido de som
+  (spec.confetti || []).forEach((cf, i) => {
+    const d = 2.6, t = cf.at === -0.5 ? total / 2 : cf.at < 0 ? Math.max(0, total + cf.at) : Math.min(Math.max(0, total - 0.6), cf.at);
+    fx.push({ kind: 'confetti', t, dur: Math.min(d, Math.max(0.6, total - t)), seed: i + 1 });
+    decisions.push(`Confete em ${fmtTc(t)}, com palmas.`);
+  });
   const audioPlan = planAudio({ tl, items, music, spec, E, total, events, rng, dialogue: dialogueMats.length > 0, decisions, fx, flashAmt });
 
   // ---------- legendas (se houver transcrição) ----------
@@ -593,12 +599,29 @@ export function buildPlan({ spec, items, music, outputIndex = 0, seed = 1, trans
   if (spec.headline && spec.headline.text) overlays.push({ id: uid('t'), kind: 'headline', text: spec.headline.text, start: 0, dur: spec.headline.all ? total : Math.min(total, spec.headline.seconds || 4), style: spec.headline.style || 'box' });
   if (E.progressBar) overlays.push({ id: uid('t'), kind: 'progress', start: 0, dur: total, color: E.progressColor || '#FFB547', pos: E.progressPos || 'top' });
   let hasPhrase = false;
-  for (const tx0 of spec.texts || []) {
+  // formato que já vem com frase de fábrica (cartão SD, retrospectiva): usa a frase da pessoa se ela mandou uma
+  const textsIn = [...(spec.texts || [])];
+  if (FX.defaultPhrase && !textsIn.some(t => t.shape === 'block' && (t.auto || t.style === FX.phrase))) textsIn.push({ shape: 'block', style: FX.phrase, text: FX.defaultPhrase, all: false, auto: true, isDefault: true });
+  let monthsFrom = 0;
+  for (const tx0 of textsIn) {
     let tx = tx0;
     if (tx.shape === 'block') hasPhrase = true;
     // formato com frase própria: a frase pedida sem estilo vira o estilo do formato
     if (tx.shape === 'block' && tx.auto && FX.phrase) tx = { ...tx, style: FX.phrase, ...(FX.phraseSecs ? { all: false, dur: FX.phraseSecs } : {}) };
-    if (tx.shape === 'block' && FX.perCut && tx.style === FX.phrase) {
+    const TS = tx.shape === 'block' ? TEXT_STYLES[tx.style] || {} : {};
+    // estilo com introdução curta (cartão SD): só nos primeiros segundos
+    if (TS.intro && tx.all !== false) tx = { ...tx, all: false, dur: TS.intro };
+    // retrospectiva: a frase fica no primeiro corte (pelo menos 1,6 s) e os meses começam depois
+    if (FX.months && tx.shape === 'block' && tx.style === FX.phrase) {
+      let k = 0; while (k < tl.length - 1 && tl[k].start + tl[k].dur < 1.6) k++;
+      const end = tl[k] ? tl[k].start + tl[k].dur : Math.min(total, 2);
+      overlays.push({ id: uid('t'), kind: 'block', style: tx.style, text: tx.text, color: tx.color || null, y: null, start: 0, dur: end, beats: null });
+      monthsFrom = k + 1; hasPhrase = true;
+      decisions.push(`Frase de abertura: "${tx.text}" até ${fmtTc(end)}.`);
+      continue;
+    }
+    const multi = String(tx.text).split(/\s*[|\n]\s*/).filter(Boolean).length > 1;
+    if (tx.shape === 'block' && ((FX.perCut && tx.style === FX.phrase) || (TS.perCut && multi))) {
       // clipe de letra: cada pedaço da frase aparece junto com um corte
       let parts = String(tx.text).split(/\s*[|\n]\s*|\s+\/\s+/).filter(Boolean);
       if (parts.length === 1) { const w = parts[0].split(/\s+/); parts = []; for (let i = 0; i < w.length; i += 3) parts.push(w.slice(i, i + 3).join(' ')); }
@@ -614,19 +637,31 @@ export function buildPlan({ spec, items, music, outputIndex = 0, seed = 1, trans
       // frase em bloco (serifa curvada, contorno branco, papel amassado)
       const st = tx.endCard ? Math.max(0, total - Math.min(3.5, total * 0.3)) : tx.from != null ? clamp(tx.from, 0, total - 0.5) : tx.style === 'terco' ? Math.min(1, total * 0.1) : 0;
       let beats = null;
+      // lista: cada item entra num corte novo
+      if (tx.style === 'lista') beats = tl.map(c => +c.start.toFixed(3)).filter(x => x > st + 0.4);
       if (tx.style === 'batida') {
         // palavras entram nas batidas da música; sem música, no começo de cada palavra falada
         if (music && audioPlan.music) beats = music.beats.map(b => b.t - audioPlan.music.in + (audioPlan.music.start || 0)).filter(x => x >= st && x <= total).map(x => +x.toFixed(3));
         else if (captions.length) beats = captions.map(w => +w.t0.toFixed(3)).filter(x => x >= st);
       }
       overlays.push({ id: uid('t'), kind: 'block', style: tx.style || 'contorno', text: tx.text, color: tx.color || null, y: tx.y != null ? tx.y : null, start: st, dur: tx.all === false ? Math.min(total - st, tx.dur || 4) : total - st, beats });
-      decisions.push(`Texto na tela (${tx.style || 'contorno'}): "${tx.text}"${tx.all === false ? ' nos primeiros segundos' : ' o vídeo todo'}.`);
+      decisions.push(`Texto na tela (${tx.style || 'contorno'}): "${tx.text}"${tx.all === false ? ' nos primeiros segundos' : ' o vídeo todo'}${tx.isDefault ? ' (frase padrão do formato; mande a sua entre aspas)' : ''}.`);
       continue;
     }
     const round = tx.shape === 'circle' || tx.shape === 'badge';
     // círculo e selo: no canto de cima (fora do rosto), a não ser que peça em volta da pessoa
     const pos = tx.follow ? { x: 0.5, y: 0.4, size: 1.45 } : round ? { x: 0.74, y: 0.2, size: 0.75 } : tx.shape === 'arc' ? { x: 0.5, y: 0.2, size: 1 } : { x: 0.5, y: 0.3, size: 1 };
     overlays.push({ id: uid('t'), kind: 'shape', shape: tx.shape, text: tx.text, follow: !!tx.follow, color: tx.color || '#FFFFFF', start: round ? Math.min(1, total * 0.1) : 0.3, dur: Math.min(total - 0.5, tx.dur || Math.max(3, total * (round ? 0.6 : 0.35))), ...pos });
+  }
+  // retrospectiva do ano: um mês em cada corte, em ordem (com menos de 12 cortes, pula meses de forma regular)
+  if (FX.months) {
+    const rest = tl.slice(monthsFrom), n = Math.min(12, rest.length);
+    for (let i = 0; i < n; i++) {
+      const c = rest[Math.floor(i * rest.length / n)], c2 = rest[Math.floor((i + 1) * rest.length / n) - 1];
+      overlays.push({ id: uid('t'), kind: 'block', style: 'rotulo', text: MONTHS_PT[Math.floor(i * 12 / n)], color: null, y: null, start: c.start, dur: c2.start + c2.dur - c.start, beats: null });
+    }
+    if (n) decisions.push(`${n} mês(es) na tela, um por corte${n < 12 ? ' (com mais vídeos ou fotos dá para ter os 12 meses)' : ''}.`);
+    if (n < 6) warnings.push('A retrospectiva fica melhor com pelo menos 12 cortes: mande mais vídeos ou fotos do ano.');
   }
   if (FX.needsPhrase && !hasPhrase) warnings.push('Esse formato pede uma frase na tela. Escreva entre aspas, por exemplo: frase "eu fazendo qualquer coisa menos responder o WhatsApp". No clipe de letra, separe as frases com |.');
   if (spec.title) { const d = Math.min(3, Math.max(1.4, total * 0.3)); overlays.push({ id: uid('t'), kind: 'title', text: spec.title, start: Math.max(0, total - d - 0.2), dur: d, style: /trailer|action|cinematic|sports|epic|gaming/.test(E.id || '') ? 'trailer' : 'clean' }); }
@@ -766,7 +801,8 @@ function planAudio({ tl, items, music, spec, E, total, events, rng, dialogue, de
   if (density > 0.02) {
     for (const c of tl) {
       if (!c.trans || c.trans.type === 'cut') continue;
-      if (c.trans.type === 'whip' || c.trans.type === 'zoom') add(c.start, 'whoosh', -12);
+      if (c.trans.type === 'whip' || c.trans.type === 'zoom' || c.trans.type === 'fan') add(c.start, 'whoosh', -12);
+      if (c.trans.type === 'rasgo') add(c.start, 'rasgo', -11);
       if (c.trans.type === 'flash') add(c.start, kinds.has('impact') ? 'impact' : 'hit', -9);
       if (c.trans.type === 'dissolve' && kinds.has('riser') && rng() < 0.25) add(c.start, 'riser', -16);
     }

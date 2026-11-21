@@ -24,7 +24,8 @@ function section(spec, sc, patch) {
   return sec;
 }
 
-export const TRANSITIONS = { cut: 'corte seco', dissolve: 'fusão', dip: 'mergulho no preto', flash: 'flash', whip: 'chicote', zoom: 'zoom', glitch: 'glitch', blur: 'desfoque', spin: 'giro', burn: 'queima de filme', slide: 'empurrar', mask: 'máscara redonda' };
+export const TRANSITIONS = { cut: 'corte seco', dissolve: 'fusão', dip: 'mergulho no preto', flash: 'flash', whip: 'chicote', zoom: 'zoom', glitch: 'glitch', blur: 'desfoque', spin: 'giro', burn: 'queima de filme', slide: 'empurrar', mask: 'máscara redonda', fan: 'ventilador', rasgo: 'papel rasgando' };
+export const SFX_PT = { boom: 'boom', whoosh: 'whoosh', riser: 'subida (riser)', impact: 'impacto', hit: 'pancada', pop: 'pop', click: 'clique', ding: 'ding', glitch: 'glitch', beep: 'bipe', swish: 'swish', camera: 'câmera', notify: 'notificação', drop: 'queda (drop)', tension: 'tensão', clap: 'palmas', sinos: 'sinos de Natal', rasgo: 'papel rasgando' };
 export const MOODS = { epic: 'épica', dramatic: 'dramática', emotional: 'emocionante', upbeat: 'animada', electronic: 'eletrônica', atmospheric: 'calma', reflective: 'reflexiva' };
 
 const P = (type, def, min, max, extra = {}) => ({ type, def, min, max, ...extra });
@@ -175,8 +176,16 @@ export const ACTIONS = {
   STEREO_BALANCE: { name: 'Balanço estéreo', cat: 'audio', desc: 'Puxa o som para a esquerda ou direita (-1 a 1).', params: { pan: P('number', 0, -1, 1) }, apply(spec, p) { spec.audio = spec.audio || {}; spec.audio.pan = p.pan; return p.pan ? `Som puxado para a ${p.pan < 0 ? 'esquerda' : 'direita'}` : 'Som centralizado'; } },
   MUTE_ORIGINAL: { name: 'Tirar o som original', cat: 'audio', desc: 'Deixa só a música.', params: { on: P('bool', true) }, apply(spec, p) { spec.audio = spec.audio || {}; spec.audio.muteOriginal = p.on; return p.on ? 'Sem o som original (só música)' : 'Com o som original'; } },
   SFX_DENSITY: { name: 'Efeitos sonoros', cat: 'audio', desc: 'Quantidade de efeitos sonoros automáticos.', params: { amount: P('number', 0.5, 0, 1) }, apply(spec, p) { setO(spec, 'sfx.density', p.amount); return p.amount ? `Efeitos sonoros (${p.amount > 0.6 ? 'muitos' : p.amount < 0.3 ? 'poucos' : 'na medida'})` : 'Sem efeitos sonoros'; } },
-  ADD_SFX: { name: 'Efeito sonoro num ponto', cat: 'audio', desc: 'Põe um efeito sonoro (boom, whoosh, riser...) num momento.', params: { kind: P('enum', 'boom', null, null, { options: ['boom', 'whoosh', 'riser', 'impact', 'pop', 'click', 'ding', 'glitch', 'swish', 'camera', 'notify', 'drop', 'tension'] }), at: P('number', 0, -3600, 3600) },
-    apply(spec, p) { spec.sfxRequests = spec.sfxRequests || []; spec.sfxRequests.push({ kind: p.kind, at: p.at, count: 1 }); return `Efeito sonoro "${p.kind}" ${p.at === -0.5 ? 'no meio' : p.at < 0 ? 'no final' : 'em ' + tc(p.at)}`; } },
+  ADD_SFX: { name: 'Efeito sonoro num ponto', cat: 'audio', desc: 'Põe um efeito sonoro (boom, whoosh, riser...) num momento.', params: { kind: P('enum', 'boom', null, null, { options: ['boom', 'whoosh', 'riser', 'impact', 'pop', 'click', 'ding', 'glitch', 'swish', 'camera', 'notify', 'drop', 'tension', 'clap', 'sinos', 'rasgo'] }), at: P('number', 0, -3600, 3600) },
+    apply(spec, p) { spec.sfxRequests = spec.sfxRequests || []; spec.sfxRequests.push({ kind: p.kind, at: p.at, count: 1 }); return `Efeito sonoro "${SFX_PT[p.kind] || p.kind}" ${p.at === -0.5 ? 'no meio' : p.at < 0 ? 'no final' : 'em ' + tc(p.at)}`; } },
+  CONFETTI: { name: 'Confete', cat: 'efeito', desc: 'Estoura confete na tela com palmas (o "boom clap"), num momento.', params: { at: P('number', -2.8, -3600, 3600), on: P('bool', true) },
+    apply(spec, p) {
+      if (!p.on) { const had = (spec.confetti || []).length; spec.confetti = []; spec.sfxRequests = (spec.sfxRequests || []).filter(r => !r.confetti); return had ? 'Sem confete' : null; }
+      spec.confetti = spec.confetti || []; spec.sfxRequests = spec.sfxRequests || [];
+      if (spec.confetti.some(c => c.at === p.at)) return null;
+      spec.confetti.push({ at: p.at }); spec.sfxRequests.push({ kind: 'clap', at: p.at, count: 1, confetti: true });
+      return `Confete com palmas ${p.at === -0.5 ? 'no meio' : p.at < 0 ? 'no final' : 'em ' + tc(p.at)}`;
+    } },
   BLEEP: { name: 'Bipar palavrões', cat: 'audio', desc: 'Bipe por cima dos palavrões e legenda mascarada.', params: { on: P('bool', true) }, apply(spec, p) { setO(spec, 'bleep', p.on); return p.on ? 'Bipar palavrões' : 'Sem bipe'; } },
   // ---------------- CORTES ESPECÍFICOS (linha do tempo) ----------------
   CLIP_TRIM: { name: 'Encurtar/alongar um corte', cat: 'ritmo', desc: 'Muda a duração de um corte específico.', params: { srcId: P('string', ''), in: P('number', 0, 0, 1e6), dur: P('number', 2, 0.05, 600), factor: P('number', 0.6, 0.2, 3), label: P('string', '') },

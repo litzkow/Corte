@@ -1,0 +1,21 @@
+<!doctype html><meta charset="utf-8"><body style="margin:0;background:#222">
+<!-- Novidades de 21/11/2026: transições ventilador e papel rasgando (WebGL) e confete (canvas) -->
+<div id="out" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+<script type="module">
+import { Compositor } from '../js/engine/gl.js';
+import { drawConfetti, drawTextBlock, ensureFonts, FONTS } from '../js/engine/captions.js';
+await ensureFonts(Object.keys(FONTS));
+const W = 270, H = 480;
+const bg = new Image(); bg.src = 'bg.png'; await bg.decode();
+// segunda imagem: listras azuis com um círculo (bem diferente da primeira)
+const b2 = document.createElement('canvas'); b2.width = 540; b2.height = 960; const x = b2.getContext('2d');
+for (let i = 0; i < 12; i++) { x.fillStyle = i % 2 ? '#1F4E8C' : '#2E7BD6'; x.fillRect(0, i * 80, 540, 80); }
+x.fillStyle = '#F2F2F2'; x.beginPath(); x.arc(270, 480, 150, 0, 7); x.fill();
+const add = (label, draw) => { const d = document.createElement('div'); d.style.cssText = 'color:#fff;font:12px sans-serif;width:' + W + 'px'; const c = document.createElement('canvas'); c.width = W; c.height = H; d.append(c, label); document.getElementById('out').append(d); draw(c); };
+const gl = document.createElement('canvas'); gl.width = W; gl.height = H;
+const comp = new Compositor(gl);
+const A = { el: bg, crop: [0, 0, 1, 1], fit: false }, B = { el: b2, crop: [0, 0, 1, 1], fit: false };
+for (const trans of ['fan', 'rasgo']) for (const mix of [0.2, 0.4, 0.5, 0.65, 0.85]) add(`${trans} ${mix}`, c => { comp.draw({ A, B, mix, trans, look: 'none', intensity: 0, time: 1 }); c.getContext('2d').drawImage(gl, 0, 0); });
+for (const age of [0.15, 0.5, 1.0, 1.7, 2.3]) add(`confete ${age}s`, c => { const ctx = c.getContext('2d'); ctx.drawImage(bg, 0, 0, W, H); drawConfetti(ctx, age, 2.6, W, H, 1); });
+window.done = true;
+</script>

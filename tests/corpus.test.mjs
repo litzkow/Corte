@@ -414,6 +414,46 @@ T('legenda minimalista dinâmica sem amarelo', (s, e) => s.captions.style === 'd
 T('legenda calma minúscula', s => s.captions.style === 'calmo', P2);
 T('legenda palavra por palavra e texto em círculo "SIGA"', s => s.captions.style === 'hormozi' && s.texts.some(t => t.shape === 'circle'), P2);
 
+// ===== 17. Tendências de 21/11/2026 =====
+const P3 = { prev: base, ctx: { plan } };
+const trans = (e, id) => (e.transitions.mix[id] || 0) > 0.3;
+const conf = (s, at) => (s.confetti || []).some(c => at == null || c.at === at) && (s.sfxRequests || []).some(r => r.kind === 'clap');
+const sfxK = (s, k) => (s.sfxRequests || []).some(r => r.kind === k);
+// rótulo por corte, horário, lista, cartão SD
+T('texto "Dia 1 | Mês 6 | 1 ano" rótulo por corte', s => blk(s, 'rotulo', 'Dia 1 | Mês 6 | 1 ano'), P3);
+T('coloca os rótulos "2016 | 2026" em cada corte', s => blk(s, 'rotulo'), P3);
+T('label text "day 1 | day 30" on each cut', s => blk(s, 'rotulo'), P3);
+T('texto com horário "7:12 | 9:40 | 13:05" em cada corte', s => blk(s, 'horario', '7:12 | 9:40 | 13:05') && !s.target, P3);
+T('vlog timestamps text "6:30 | 8:00 | 12:15"', s => blk(s, 'horario'), P3);
+T('texto em lista "contas que não negocio: | café | unha feita"', s => blk(s, 'lista'), P3);
+T('frase "cheat code da vida: | dormir cedo | beber água" lista aparecendo', s => blk(s, 'lista'), P3);
+T('texto "ultimamente no meu cartão SD" com cartão sd', s => blk(s, 'cartaosd') || (mixHas(s, 'cartaosd') && s.texts.length), P3);
+// formatos
+T('retrospectiva do ano', s => mixHas(s, 'retro'), P3);
+T('faz uma retrospectiva "sinto que não fiz nada esse ano"', s => mixHas(s, 'retro') && s.texts.some(t => t.text === 'sinto que não fiz nada esse ano'), P3);
+T('year in review com um mês por corte', s => mixHas(s, 'retro'), P3);
+T('edita no estilo lately on my sd card', s => mixHas(s, 'cartaosd'), P3);
+T('ultimamente no meu cartão sd', s => mixHas(s, 'cartaosd'), P3);
+// transições
+T('transição de ventilador', (s, e) => trans(e, 'fan'), P3);
+T('fan transition', (s, e) => trans(e, 'fan'), P3);
+T('transição de papel rasgando', (s, e) => trans(e, 'rasgo'), P3);
+T('transições rasgando papel de presente', (s, e) => trans(e, 'rasgo'), P3);
+T('paper tear transitions', (s, e) => trans(e, 'rasgo'), P3);
+// confete e sons
+T('confete no final', s => conf(s, -2.8), P3);
+T('chuva de confete aos 0:05', s => conf(s, 5), P3);
+T('boom clap com confete no meio', s => conf(s, -0.5), P3);
+T('add confetti at the end', s => conf(s), P3);
+T('tira o confete', s => !(s.confetti || []).length, { prev: interpret('confete no final', base, { plan }).spec, ctx: { plan } });
+T('palmas no final', s => sfxK(s, 'clap'), P3);
+T('sinos de natal no começo', s => sfxK(s, 'sinos'), P3);
+T('um som de papel rasgando no 0:03', s => sfxK(s, 'rasgo'), P3);
+T('confete no final e transição de ventilador', (s, e) => conf(s) && trans(e, 'fan'), P3);
+// o que já existia continua igual
+T('sininho no final', s => sfxK(s, 'ding') && !sfxK(s, 'sinos'), P3);
+T('texto "presta atenção" pequeno', s => blk(s, 'zoom'), P3);
+
 // ===== 9. Não deve inventar =====
 T('oi', (s, e, r) => notUnderstood(r));
 T('qual é a capital da França', (s, e, r) => notUnderstood(r));

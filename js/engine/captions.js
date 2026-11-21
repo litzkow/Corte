@@ -420,7 +420,13 @@ export const TEXT_STYLES = {
   letra:     { label: 'Letra pequena no centro', desc: 'Frase pequena em serifa branca bem no meio, trocando a cada corte. Separe as frases com |.', font: 'garamond', weight: 500, upper: false, size: 0.05, lh: 1.25, fill: '#FFFFFF', shadow: [0, 0.03, 0.3, 'rgba(0,0,0,.55)'], y: 0.5, enter: 'none', sample: 'lately | I\'ve been | dreaming' },
   gancho:    { label: 'Gancho em cima', desc: 'Frase minúscula branca arredondada com sombra, no alto, nos primeiros segundos. O texto nativo dos vlogs.', font: 'nunito', weight: 800, upper: false, lower: true, size: 0.056, lh: 1.2, fill: '#FFFFFF', shadow: [0, 0.03, 0.22, 'rgba(0,0,0,.65)'], y: 0.24, enter: 'none', sample: 'quando você percebe que tudo era ilusão' },
   digitando: { label: 'Digitando', desc: 'A frase aparece letra por letra, com cursor piscando.', render: 'typing', font: 'spacemono', weight: 700, upper: false, size: 0.056, lh: 1.3, fill: '#FFFFFF', box: 'rgba(0,0,0,.62)', y: 0.42, enter: 'none', sample: 'ninguém acreditou quando eu disse' },
+  // ----- pesquisa de 21/11/2026 -----
+  rotulo:    { label: 'Rótulo por corte', desc: 'Um rótulo grande que troca a cada corte: Dia 1 | Mês 6 | 1 ano, ou anos do antes e depois. Separe com |.', perCut: true, font: 'montserrat', weight: 900, upper: false, size: 0.105, lh: 1.05, fill: '#FFFFFF', shadow: [0, 0.035, 0.22, 'rgba(0,0,0,.55)'], y: 0.2, enter: 'slam', sample: 'Dia 1 | Mês 6 | 1 ano' },
+  horario:   { label: 'Horário do vlog', desc: 'Um horário pequeno em cada corte, como diário do dia (vlog timestamps). Separe com |.', render: 'stamp', perCut: true, font: 'spacemono', weight: 700, upper: false, size: 0.046, lh: 1.2, fill: '#FFFFFF', box: 'rgba(12,12,14,.66)', accent: '#FF453A', y: 0.13, enter: 'none', sample: '7:12 | 9:40 | 13:05 | 18:30' },
+  lista:     { label: 'Lista aparecendo', desc: 'Um título e os itens entrando um por um, a cada corte. Separe título e itens com |.', render: 'list', font: 'poppins', weight: 800, upper: false, size: 0.06, lh: 1.35, fill: '#FFFFFF', box: '#FFFFFF', shadow: [0, 0.03, 0.22, 'rgba(0,0,0,.6)'], y: 0.24, enter: 'none', sample: 'contas que eu não negocio: | café de 18 reais | unha feita | o streaming que eu não assisto' },
+  cartaosd:  { label: 'Cartão SD', desc: 'Um cartão de memória desenhado com a frase, abrindo uma sequência rápida de clipes ("lately on my SD card").', render: 'sd', intro: 2.2, font: 'spacemono', weight: 700, upper: false, size: 0.05, lh: 1.25, fill: '#FFFFFF', shadow: [0, 0.03, 0.25, 'rgba(0,0,0,.6)'], y: 0.44, enter: 'none', sample: 'ultimamente no meu cartão SD' },
 };
+export const MONTHS_PT = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
 const wrapText = (ctx, text, maxW) => {
   const out = [];
   for (const para of String(text).split(/\n/)) {
@@ -476,6 +482,9 @@ export function drawTextBlock(ctx, el, t, W, H, area) {
     ctx.fillStyle = fill; roundRect(ctx, cx - bw / 2, by, Math.max(bh, bw * pct / 100), bh, bh / 2); ctx.fill();
     ctx.restore(); return;
   }
+  if (R === 'stamp') { drawStamp(ctx, st, text, age, cx, cy, px, outA, t); ctx.restore(); return; }
+  if (R === 'list') { drawList(ctx, st, text, el, age, cx, cy, px, maxW, area ? area.h : H * 0.8, outA); ctx.restore(); return; }
+  if (R === 'sd') { drawSdCard(ctx, st, text, age, cx, cy, px, maxW, W, outA); ctx.restore(); return; }
   if (R === 'zoom') px *= 1 + 0.9 * ease.inOut(clamp(age / Math.max(1, el.dur), 0, 1));
 
   // ajusta o tamanho para caber (no máximo 6 linhas)
@@ -584,6 +593,98 @@ function drawCurveLine(ctx, st, ln, cx, y, px, lw, fill, nLines) {
     ctx.restore();
   }
 }
+// horário do vlog: pílula escura com ponto vermelho piscando e a hora em fonte mono
+function drawStamp(ctx, st, text, age, cx, cy, px, outA, t) {
+  ctx.font = fontStr(st, px); ctx.textAlign = 'left';
+  const tw = ctx.measureText(text).width, dot = px * 0.36, padX = px * 0.62, gap = px * 0.42;
+  const w = padX * 2 + dot + gap + tw, h = px * 1.7, x = cx - w / 2;
+  const e = clamp(age / 0.16, 0, 1);
+  ctx.globalAlpha = outA * e;
+  ctx.translate(cx, cy); ctx.scale(0.92 + 0.08 * ease.out(e), 0.92 + 0.08 * ease.out(e)); ctx.translate(-cx, -cy);
+  ctx.fillStyle = st.box; roundRect(ctx, x, cy - h / 2, w, h, h / 2); ctx.fill();
+  ctx.fillStyle = st.accent; ctx.globalAlpha = outA * e * (Math.floor(t * 1.6) % 2 === 0 ? 1 : 0.35);
+  ctx.beginPath(); ctx.arc(x + padX + dot / 2, cy, dot / 2, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = outA * e; ctx.fillStyle = st.fill; ctx.fillText(text, x + padX + dot + gap, cy + px * 0.04);
+}
+// lista aparecendo: título numa caixa branca e itens entrando um por um (nos cortes, quando houver)
+function drawList(ctx, st, text, el, age, cx, cy, px, maxW, maxH, outA) {
+  const parts = text.split(/\s*\|\s*|\n/).map(x => x.trim()).filter(Boolean);
+  const title = parts[0] || '', items = parts.slice(1);
+  // tempo de entrada de cada item: nos cortes (beats) ou num passo fixo
+  const cuts = (el.beats || []).map(b => b - el.start).filter(b => b > 0.45 && b < (el.dur || 99) - 0.6);
+  const step = clamp(((el.dur || 6) * 0.75 - 0.7) / Math.max(1, items.length), 0.6, 1.5);
+  const at = items.map((_, i) => cuts.length > i ? cuts[i] : (cuts.length ? cuts[cuts.length - 1] + (i - cuts.length + 1) * step : 0.7 + i * step));
+  // cabe na tela: diminui até título + itens caberem
+  let tl, il, lh;
+  for (let k = 0; k < 14; k++) {
+    ctx.font = fontStr(st, px * 1.08); tl = wrapText(ctx, title, maxW * 0.9);
+    ctx.font = fontStr(st, px, { weight: 700 }); il = items.map(it => wrapText(ctx, it, maxW * 0.86));
+    lh = px * st.lh;
+    const hh = tl.length * lh * 1.1 + px * 0.6 + il.reduce((a, b) => a + b.length, 0) * lh + items.length * px * 0.18;
+    if (hh <= maxH * 0.72) break; px *= 0.9;
+  }
+  let y = cy - lh / 2;
+  ctx.textAlign = 'center'; ctx.globalAlpha = outA * clamp(age / 0.18, 0, 1);
+  ctx.font = fontStr(st, px * 1.08);
+  for (const ln of tl) {
+    const w = ctx.measureText(ln).width, bh = lh * 1.1;
+    ctx.fillStyle = st.box; roundRect(ctx, cx - w / 2 - px * 0.36, y - bh / 2, w + px * 0.72, bh, px * 0.26); ctx.fill();
+    ctx.fillStyle = '#111111'; ctx.fillText(ln, cx, y + px * 0.04); y += bh;
+  }
+  y += px * 0.55;
+  ctx.font = fontStr(st, px, { weight: 700 });
+  const colW = Math.max(1, ...il.flat().map(l => ctx.measureText(l).width));
+  const x0 = cx - colW / 2; ctx.textAlign = 'left';
+  il.forEach((lines, i) => {
+    const la = age - at[i];
+    if (la < 0) { y += lines.length * lh + px * 0.18; return; }
+    const e = clamp(la / 0.16, 0, 1), sc = 0.82 + 0.18 * ease.back(e);
+    ctx.globalAlpha = outA * clamp(la / 0.08, 0, 1);
+    for (const ln of lines) {
+      ctx.save(); ctx.translate(x0, y); ctx.scale(sc, sc); ctx.translate(-x0, -y);
+      drawWord(ctx, st, ln, x0, y, px, { fill: st.fill, stroke: '#000000', strokeW: 0.1, shadow: st.shadow });
+      ctx.restore(); y += lh;
+    }
+    y += px * 0.18;
+  });
+}
+// cartão SD desenhado (genérico, sem marca) que cai e assenta, com a frase sendo digitada embaixo
+function drawSdCard(ctx, st, text, age, cx, cy, px, maxW, W, outA) {
+  const cw = W * 0.3, ch = cw * 1.32, cut = cw * 0.24;
+  const e = clamp(age / 0.5, 0, 1), drop = (1 - ease.back(e)) * -ch * 0.9;
+  const rot = (-7 + 4 * ease.out(e)) * Math.PI / 180;
+  const top = cy - ch - px * 0.6 + drop;
+  ctx.globalAlpha = outA * clamp(age / 0.12, 0, 1);
+  ctx.save(); ctx.translate(cx, top + ch / 2); ctx.rotate(rot); ctx.translate(-cw / 2, -ch / 2);
+  const r = cw * 0.06;
+  const body = () => { ctx.beginPath(); ctx.moveTo(r, 0); ctx.lineTo(cw - cut, 0); ctx.lineTo(cw, cut); ctx.lineTo(cw, ch - r); ctx.quadraticCurveTo(cw, ch, cw - r, ch); ctx.lineTo(r, ch); ctx.quadraticCurveTo(0, ch, 0, ch - r); ctx.lineTo(0, r); ctx.quadraticCurveTo(0, 0, r, 0); ctx.closePath(); };
+  ctx.shadowColor = 'rgba(0,0,0,.5)'; ctx.shadowBlur = cw * 0.12; ctx.shadowOffsetY = cw * 0.05;
+  const g = ctx.createLinearGradient(0, 0, cw, ch); g.addColorStop(0, '#2A2B30'); g.addColorStop(1, '#111215');
+  ctx.fillStyle = g; body(); ctx.fill(); ctx.shadowColor = 'transparent';
+  // ranhuras de cima
+  ctx.fillStyle = 'rgba(255,255,255,.08)'; for (let i = 0; i < 7; i++) ctx.fillRect(cw * (0.1 + i * 0.085), cw * 0.07, cw * 0.045, cw * 0.17);
+  // etiqueta
+  const lx = cw * 0.1, ly = ch * 0.36, lw = cw * 0.8, lhh = ch * 0.52;
+  const lg = ctx.createLinearGradient(0, ly, 0, ly + lhh); lg.addColorStop(0, '#F2EEE6'); lg.addColorStop(1, '#D9D3C7');
+  ctx.fillStyle = lg; roundRect(ctx, lx, ly, lw, lhh, cw * 0.04); ctx.fill();
+  ctx.fillStyle = '#E4572E'; ctx.fillRect(lx, ly + lhh * 0.7, lw, lhh * 0.1);
+  ctx.fillStyle = '#16171A'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = `${wgtFor('archivo', 400)} ${Math.round(cw * 0.2)}px ${fam('archivo')}`; ctx.fillText('64GB', cw / 2, ly + lhh * 0.36);
+  ctx.font = `${wgtFor('spacemono', 700)} ${Math.round(cw * 0.07)}px ${fam('spacemono')}`; ctx.fillText('MEMÓRIA', cw / 2, ly + lhh * 0.9);
+  // trava lateral
+  ctx.fillStyle = '#3A3B40'; ctx.fillRect(-cw * 0.03, ch * 0.3, cw * 0.05, ch * 0.14); ctx.fillStyle = '#C9C9CE'; ctx.fillRect(-cw * 0.03, ch * 0.3, cw * 0.05, ch * 0.06);
+  // brilho
+  ctx.globalAlpha *= 0.5; const sh = ctx.createLinearGradient(0, 0, cw, 0); sh.addColorStop(0, 'rgba(255,255,255,0)'); sh.addColorStop(0.5, 'rgba(255,255,255,.14)'); sh.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = sh; body(); ctx.fill();
+  ctx.restore();
+  // frase digitada embaixo
+  const n = Math.max(0, Math.floor((age - 0.45) * 22));
+  ctx.globalAlpha = outA; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = fontStr(st, px); const lines = wrapText(ctx, text, maxW); let left = n;
+  let y = cy + px * 0.9;
+  ctx.shadowOffsetY = st.shadow[1] * px; ctx.shadowBlur = st.shadow[2] * px; ctx.shadowColor = st.shadow[3]; ctx.fillStyle = st.fill;
+  for (const ln of lines) { const part = ln.slice(0, clamp(left, 0, ln.length)); left -= ln.length + 1; if (part) { const lw2 = ctx.measureText(ln).width; ctx.textAlign = 'left'; ctx.fillText(part, cx - lw2 / 2, y); } y += px * st.lh; }
+}
 // conversa de mensagem: falas separadas por "|" ou quebra de linha, alternando cinza (esquerda) e azul (direita)
 function drawBubbles(ctx, st, text, age, cx, cy, px, maxW, W, outA) {
   const msgs = text.split(/\s*\|\s*|\n/).map(x => x.trim()).filter(Boolean);
@@ -663,6 +764,36 @@ export function drawProgress(ctx, el, t, W, H, total) {
   ctx.fillStyle = el.color || '#FFB547'; ctx.fillRect(0, y, W * clamp(t / total, 0, 1), h); ctx.restore();
 }
 
+// Confete do "boom clap": dois canhões nos cantos de baixo, papeizinhos girando e caindo.
+// Tudo é função do tempo (mesmo quadro na prévia e na exportação).
+const CONFETTI_COLORS = ['#FFD23F', '#FF4D6D', '#3DDC97', '#4CC9F0', '#FFFFFF', '#B983FF', '#FF8C42'];
+export function drawConfetti(ctx, age, dur, W, H, seed = 1) {
+  const g = H * 0.55, N = 150, base = Math.min(W, H);
+  const fade = clamp((dur - age) / 0.6, 0, 1);
+  ctx.save();
+  for (let i = 0; i < N; i++) {
+    const r = k => hashN(i + seed * 1000, k);
+    const left = i % 2 === 0, delay = r(1) * 0.12; const a = age - delay; if (a < 0) continue;
+    const ang = -Math.PI / 2 + (left ? 1 : -1) * (0.12 + r(2) * 0.42);   // para cima e para dentro
+    const sp = H * (2.0 + r(3) * 1.2);
+    const drag = 2.7 + r(4) * 0.9;                                   // resistência do ar: sobe rápido e depois flutua devagar
+    const k = (1 - Math.exp(-drag * a)) / drag;
+    const vt = g / drag;                                             // velocidade final de queda
+    const x0 = left ? W * 0.02 : W * 0.98, y0 = H * 1.02;
+    const x = x0 + Math.cos(ang) * sp * k + Math.sin(a * (3 + r(5) * 4) + r(6) * 6) * base * 0.03 * Math.min(1, a);
+    const y = y0 + Math.sin(ang) * sp * k + vt * (a - k);
+    if (y > H * 1.1) continue;
+    const s = base * (0.012 + r(7) * 0.014), spin = a * (6 + r(8) * 10) + r(9) * 6;
+    ctx.globalAlpha = fade * clamp(a / 0.05, 0, 1);
+    ctx.fillStyle = CONFETTI_COLORS[Math.floor(r(10) * CONFETTI_COLORS.length)];
+    ctx.save(); ctx.translate(x, y); ctx.rotate(spin * 0.5); ctx.scale(Math.cos(spin), 1);
+    if (r(11) < 0.25) { ctx.beginPath(); ctx.arc(0, 0, s * 0.6, 0, Math.PI * 2); ctx.fill(); }
+    else ctx.fillRect(-s, -s * 0.45, s * 2, s * 0.9);
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
 // Camada de textos usada pelo renderizador.
 export class Overlays {
   constructor(plan) {
@@ -677,6 +808,7 @@ export class Overlays {
   draw(ctx, t, W, H) {
     const p = this.plan, fmt = p.fmt, s = fmt.safe;
     const area = { x: s.left * W, y: s.top * H, w: W * (1 - s.left - s.right), h: H * (1 - s.top - s.bottom) };
+    for (const f of p.fx || []) if (f.kind === 'confetti' && t >= f.t && t <= f.t + f.dur) drawConfetti(ctx, t - f.t, f.dur, W, H, f.seed || 1);
     for (const el of p.overlays || []) {
       if (el.kind === 'shape') drawShape(ctx, el, t, W, H, this.subjectAt ? this.subjectAt(t) : null);
       else if (el.kind === 'title') drawTitle(ctx, el, t, W, H);

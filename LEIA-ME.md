@@ -24,13 +24,24 @@ Receitas completas tiradas de vídeos que bombaram em nov/2026 (ver `docs/tenden
 - **Clipe de letra**: `clipe de letra "lately | I've been | dreaming"` (frases separadas por |)
 - **Comentário com memes**, **Tela dividida contando história**, **História cinematográfica**,
   **Conversa com sustos**, **Lance com batida (phonk)**, **Vlog narrado com piada**.
+- **Retrospectiva do ano** (versão 2.9): `retrospectiva do ano, 15 segundos` — frase de abertura e um mês por corte.
+- **Ultimamente no cartão SD** (versão 2.9): `lately on my sd card` — cartão de memória desenhado e clipes de menos de 1 s.
 A legenda é automática: com vídeo que tem fala, o app transcreve sozinho no aparelho (Whisper) e a legenda aparece quando fica pronta.
+
+## Novidades da versão 2.9 (tendências de 21/11/2026)
+- Texto na tela: **rótulo por corte** (`texto "Dia 1 | Mês 6 | 1 ano" rótulo por corte`), **horário do vlog**
+  (`texto "7:12 | 9:40 | 13:05" com horário em cada corte`), **lista aparecendo** (`texto "contas que eu não negocio: | café | unha feita" em lista`)
+  e **cartão SD**.
+- Transições: **ventilador** (pás girando na frente) e **papel rasgando** (o "papel de presente" de fim de ano).
+- **Confete com palmas** ("boom clap"): `confete no final` ou `confete aos 0:05`; também na folha Texto.
+- Sons novos, gerados por código: **palmas**, **sinos de Natal** e **papel rasgando**. A folha Áudio agora tem os
+  efeitos sonoros para ouvir e colocar no ponto da prévia.
 
 ## O que funciona (testado)
 - Análise: silêncios e pausas, fala, batidas e BPM da música, trocas de cena, movimento, tremor,
   exposição, nitidez, rosto (para reenquadrar).
 - Diretor: entende pedidos em português e inglês, com gíria e erro de digitação, e sempre mostra o que entendeu.
-  Banco de 345 frases testadas, do simples ao complexo. Exemplos:
+  Banco de 374 frases testadas, do simples ao complexo. Exemplos:
   - momentos: "câmera lenta no final e um freeze no comecinho", "congela aqui por 2 segundos",
     "acelera de 0:10 a 0:15", "tira esse pedaço", "tira os primeiros 3 segundos", "começa direto no 0:12";
   - legenda: "a legenda tá muito grande", "letra mais grossa", "caixa alta", "legenda só nas palavras importantes";
@@ -39,7 +50,7 @@ A legenda é automática: com vídeo que tem fala, o app transcreve sozinho no a
   - imagem: "mais nitidez", "aumenta o contraste", "deixa mais claro e mais vivo", "segue meu rosto", "zoom lento";
   - geral: "dá uma melhorada geral", "não gostei" (outra montagem), "faz um de 15 e um de 60 segundos",
     "transição de zoom", "barra de progresso embaixo", "gostei, exporta".
-- 18 estilos de edição, 11 looks de cor, 24 estilos de legenda, 19 fontes, 8 textos com forma.
+- 29 estilos de edição e 10 formatos virais, 20 looks de cor, 29 estilos de legenda, 20 fontes, 23 estilos de texto na tela, 8 textos com forma e 14 transições.
 - 15 estilos de texto na tela em alta (pesquisa de nov/2026): serifa curvada, contorno branco (Edits),
   papel amassado, minimalista dinâmico, caixa do TikTok, pílulas coloridas, amarelo confissão,
   estética calma, conversa de mensagem (falas separadas por |), recorte de revista, marca-texto,
@@ -60,3 +71,4 @@ A legenda é automática: com vídeo que tem fala, o app transcreve sozinho no a
 - `node tests/director.test.mjs` e `node tests/corpus.test.mjs` — o diretor e o banco de frases (rodam também na publicação).
 - `tests/e2e_ui.py` e `tests/e2e_ui2.py` — a interface inteira no Chrome sem tela, como num celular.
 - `tests/*.html` + `tests/*.py` — análise, plano, mixagem e renderização (precisam dos vídeos de `tests/gen_media.py`).
+- `tests/t_novidades.html` — desenha as transições ventilador e papel rasgando e o confete em vários instantes.

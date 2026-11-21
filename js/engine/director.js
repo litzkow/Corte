@@ -57,6 +57,8 @@ const STYLE_WORDS = [
   ['susto', /\b(conversa|video|stream|live) com sustos?\b|\bestilo (stream|streamer)\b|\bclipe de (stream|live)\b/],
   ['phonk', /\bphonk\b|\blance com batida\b|\b(edit|edicao) de (futebol|lance|esporte)\b|\bvelocity edit\b/],
   ['vlogpiada', /\bvlog (narrado|com piada|de humor|engracado)\b/],
+  ['retro', /\bretrospectiva( do (meu )?ano)?\b|\byear in review\b|\b(resumo|recap) do (meu )?ano\b|\bnao fiz nada (esse|este|nesse|neste) ano\b|\bhaven'?t done much\b|\bmes a mes\b|\bum mes (por|em cada) corte\b|\bmeses do ano\b/],
+  ['cartaosd', /\bcartao (sd|de memoria)\b|\bsd ?card\b|\blately on my\b|\bultimamente no (meu )?cartao\b/],
   ['trailer', /\btrailer\b|\bteaser\b/],
   ['action', /\bacao\b|\baction\b|\bhollywood\b|\bexplosiv|\badrenalina\b|\bblockbuster\b/],
   ['cinematic', /\bcinematografic|\bcinematic\b|\bcinema\b|\bfilme\b(?! de viagem)|\bfilmic\b|\bvisualmente bonit|\bvisually beautiful\b/],
@@ -288,7 +290,9 @@ export function interpret(text, prev, ctx = {}) {
     said.push('Formato: ' + outs.map(o => PLATFORMS[o.platform].label + (o.duration ? ` (${fmtDur(o.duration)})` : '')).join(', '));
     if (outs.length === 1 && outs[0].duration && !spec.target) spec.target = { seconds: outs[0].duration, exact: outs[0].exact };
   }
-  if (!spec.target && !filteredPlats.length && mentions.length === 1 && !usedIdx.has(mentions[0].idx) && mentions[0].v >= 5 && s.replace(mentions[0].raw, '').replace(/\b(um|uma|de|com|so|apenas|quero|faz|faca|em|ter|tenha|video|o|a|deixa|deixe|fica|ficar|pra|para|total|no|tamanho|duracao|corta|corte|reduz|reduza|ele|isso)\b/g, '').trim().length < 4) { spec.target = { seconds: mentions[0].v, exact: false }; changed.add('target'); }
+  // "vlog, 15 segundos" / "retrospectiva do ano, 15 segundos": tirando o estilo pedido, só sobra a duração
+  const sNoStyle = styleHits.reduce((acc, h) => { const w = STYLE_WORDS.find(x => x[0] === h.id); return w ? acc.replace(new RegExp(w[1].source, 'g'), ' ') : acc; }, s).replace(/[,.;:!]/g, ' ');
+  if (!spec.target && !filteredPlats.length && mentions.length === 1 && !usedIdx.has(mentions[0].idx) && mentions[0].v >= 5 && sNoStyle.replace(mentions[0].raw, '').replace(/\b(um|uma|de|com|so|apenas|quero|faz|faca|em|ter|tenha|video|o|a|deixa|deixe|fica|ficar|pra|para|total|no|tamanho|duracao|corta|corte|reduz|reduza|ele|isso|estilo|style|formato|edita|edit)\b/g, '').trim().length < 4) { spec.target = { seconds: mentions[0].v, exact: false }; changed.add('target'); }
   if (changed.has('target') && spec.target) said.push(`Duração final ${spec.target.exact ? 'exata de ' : 'de cerca de '}${fmtDur(spec.target.seconds)}`);
 
   // "transforma 40 minutos em 60 segundos": a primeira duração é o material, a segunda o alvo
@@ -350,8 +354,8 @@ export function interpret(text, prev, ctx = {}) {
   if (/\b(audio original|original\s+(\w+\s+)?audio|som original|fala original|dialogo|dialogue|conversa)\b/.test(s) && /\b(mant|keep|preserv|100|deixa)\b/.test(s)) { spec.audio.keepDialogue = true; set('music.duckDb', -16); said.push('Fala original preservada a 100%, música abaixa quando alguém fala'); }
 
   // ------ efeitos sonoros ------
-  const sfxMap = [['impact', /impact|impacto|pancada|hit|batida forte/], ['whoosh', /whoosh|swoosh|vento|passagem/], ['riser', /riser|subida|tensao subindo/], ['boom', /boom|explos/], ['pop', /\bpop\b|estalo/], ['ding', /ding|sininho/]];
-  const cm = s.match(/(\d+)\s+(\w+\s+)?(impactos?|impacts?|whooshes|whoosh|risers?|explosoes|explosions|booms?|hits?)\b/);
+  const sfxMap = [['impact', /impact|impacto|pancada|hit|batida forte/], ['whoosh', /whoosh|swoosh|vento|passagem/], ['riser', /riser|subida|tensao subindo/], ['boom', /boom|explos/], ['pop', /\bpop\b|estalo/], ['ding', /ding|sininho/], ['clap', /(?:palma|palmas)|(?:clap|claps)|(?:aplauso|aplausos)/], ['sinos', /(?:sino|sinos)|jingle/]];
+  const cm = s.match(/(\d+)\s+(\w+\s+)?(impactos?|impacts?|whooshes|whoosh|risers?|explosoes|explosions|booms?|hits?|palmas|(?:clap|claps))\b/);
   if (cm) { const kind = sfxMap.find(([, re]) => re.test(cm[3]))[0]; spec.sfxRequests.push({ kind, count: +cm[1] }); said.push(`${cm[1]} efeitos de ${sfxPt(kind)}`); }
   if (/\b(efeitos sonoros|sound effects|sfx|sound design|efeito sonoro)\b/.test(s)) {
     if (/\b(sem|no|tira|remove|menos|fewer|less|nao quero|nao coloca|without)\b.{0,15}\b(efeitos sonoros|sound effects|sfx)/.test(s)) { set('sfx.density', 0.05); said.push('Quase sem efeitos sonoros'); }
@@ -423,13 +427,17 @@ export function interpret(text, prev, ctx = {}) {
   const quotedTxt = dq.length ? dq : [...String(text).matchAll(/["“”']([^"“”']{1,80})["“”']/g)].map(x => x[1]);
   // --- texto na tela em bloco: serifa curvada, contorno branco, papel amassado ---
   const BLOCK_WORDS = [
+    ['cartaosd', /\b(cartao (sd|de memoria)|sd ?card|lately on my)\b/],
+    ['horario', /\b((?:horario|horarios)|(?:timestamp|timestamps)|hora (em|no|de) cada (corte|clipe|cena)|carimbo de hora|relogio|hora do dia)\b/],
+    ['lista', /\b(lista|listinha|(?:item|itens) (um|uma) (por|de cada) (vez|um|uma)|um item por corte|text list|the bills|inegociave\w*|non ?negotiable)\b/],
+    ['rotulo', /\b((?:rotulo|rotulos)|(?:etiqueta|etiquetas)|(?:label|labels)|um (nome|ano|dia) (por|em cada) corte|then and now|antes e depois com (os )?anos|dia 1|day 1)\b/],
     ['mensagem', /\b(imessage|mensage[mn]s?|conversa (de|no|do) (whats\w*|zap|iphone|celular)|baloes?( de mensagem)?|chat|whatsapp|zap|print de conversa)\b/],
     ['revista', /\b(recortes? de (revista|jornal)|revista|jornal|ransom|letras recortadas|carta de sequestro|colagem de letras)\b/],
     ['marcatexto', /\b(marca[ -]?textos?|highlighter|marcador amarelo|grifad\w*|grifo)\b/],
     ['carregando', /\b(carregando|loading|porcentagem|percentual|de 0 a 100)\b/],
     ['digitando', /\b(digitando|sendo digitad\w*|letra por letra|typing)\b/],
     ['batida', /\b(na batida|no ritmo da musica|uma palavra (de cada vez|por vez)|(texto|frase) palavra por palavra)\b/],
-    ['zoom', /\b(texto pequeno|letra pequena|small text|(texto|frase) (com|dando|que da) zoom|zoom no texto)\b/],
+    ['zoom', /\b(texto pequeno|letra pequena|(texto|frase) "frase" pequen[oa]|small text|(texto|frase) (com|dando|que da) zoom|zoom no texto)\b/],
     ['pilulas', /\b(pilulas?|pills?|chips?|fundo colorido (em|nas|por|atras de) (cada )?palavras?)\b/],
     ['caixa', /\b(caixa branca|fundo branco|texto (nativo )?do (tiktok|instagram)|com fundo|fundo atras|caixinha)\b/],
     ['confissao', /\b(confissao|desabafo|pensamento sincero|(texto|frase|letra) amarel[oa]( grande)?|amarelo grande)\b/],
@@ -607,7 +615,7 @@ export function fmtDur(s) {
 const parseTc = x => { const m = x.match(/(\d+):(\d+(?:\.\d+)?)/); return m ? +m[1] * 60 + +m[2] : parseFloat(x); };
 const fmtTc = t => `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
 const moodPt = m => ({ epic: 'épica', dramatic: 'dramática', emotional: 'emocionante', upbeat: 'animada', electronic: 'eletrônica', atmospheric: 'atmosférica', slow: 'mais lento', fast: 'mais rápido', reflective: 'reflexiva' })[m] || m;
-const sfxPt = k => ({ impact: 'impacto', whoosh: 'whoosh', riser: 'subida (riser)', boom: 'explosão', pop: 'pop', ding: 'ding' })[k] || k;
+const sfxPt = k => ({ impact: 'impacto', whoosh: 'whoosh', riser: 'subida (riser)', boom: 'explosão', pop: 'pop', ding: 'ding', clap: 'palmas', sinos: 'sinos de Natal' })[k] || k;
 const shapePt = k => ({ circle: 'círculo', arc: 'arco', wave: 'onda', badge: 'selo', spiral: 'espiral' })[k] || k;
 const langPt = k => ({ pt: 'português', en: 'inglês', es: 'espanhol', fr: 'francês' })[k] || k;
 
@@ -827,14 +835,14 @@ function extraRules({ s, text, spec, prev, ctx, said, warn, ask, set, changed, s
     }
   }
   // --- tipo de transição pelo nome ---
-  const tn = s.match(/\btransic\w*\s+(?:de |com |em |tipo |estilo )?(zoom|chicote|whip|glitch|flash|clarao|fade|dissolve|dissolvencia|suave|mergulho|preto|fusao|corte seco)\b|\b(zoom|chicote|whip|glitch|flash|fade|dissolve|fusao)\s+(?:nas |de |como |entre as )?transic/);
+  const tn = s.match(/\btransic\w*\s+(?:de |com |em |tipo |estilo )?(zoom|chicote|whip|glitch|flash|clarao|fade|dissolve|dissolvencia|suave|mergulho|preto|fusao|corte seco|ventilador|papel rasgando|papel rasgado|papel de presente|rasgando|rasgo)\b|\b(zoom|chicote|whip|glitch|flash|fade|dissolve|fusao|ventilador|fan|rasgo|paper tear|paper rip)\s+(?:nas |de |como |entre as )?transic/);
   if (tn) {
     const k = tn[1] || tn[2];
-    const id = { zoom: 'zoom', chicote: 'whip', whip: 'whip', glitch: 'glitch', flash: 'flash', clarao: 'flash', fade: 'dissolve', dissolve: 'dissolve', dissolvencia: 'dissolve', suave: 'dissolve', fusao: 'dissolve', mergulho: 'dip', preto: 'dip', 'corte seco': 'cut' }[k];
+    const id = { zoom: 'zoom', chicote: 'whip', whip: 'whip', glitch: 'glitch', flash: 'flash', clarao: 'flash', fade: 'dissolve', dissolve: 'dissolve', dissolvencia: 'dissolve', suave: 'dissolve', fusao: 'dissolve', mergulho: 'dip', preto: 'dip', 'corte seco': 'cut', ventilador: 'fan', fan: 'fan', 'papel rasgando': 'rasgo', 'papel rasgado': 'rasgo', 'papel de presente': 'rasgo', rasgando: 'rasgo', rasgo: 'rasgo', 'paper tear': 'rasgo', 'paper rip': 'rasgo' }[k];
     if (id && id !== 'cut') {
-      set('transitions.mix', { cut: 0.4, [id]: 0.6 }); set('transitions.dur', id === 'dissolve' || id === 'dip' ? 0.5 : 0.25);
+      set('transitions.mix', { cut: 0.4, [id]: 0.6 }); set('transitions.dur', id === 'dissolve' || id === 'dip' ? 0.5 : id === 'rasgo' ? 0.55 : id === 'fan' ? 0.4 : 0.25);
       for (let i = said.length - 1; i >= 0; i--) if (/^(Transições|Mais transições|Zoom de ênfase)/.test(said[i])) said.splice(i, 1);
-      said.push(`Transições de ${{ zoom: 'zoom', whip: 'chicote (whip pan)', glitch: 'glitch', flash: 'flash', dissolve: 'fusão suave', dip: 'mergulho no preto' }[id]}`);
+      said.push(`Transições de ${{ zoom: 'zoom', whip: 'chicote (whip pan)', glitch: 'glitch', flash: 'flash', dissolve: 'fusão suave', dip: 'mergulho no preto', fan: 'ventilador (pás girando na frente)', rasgo: 'papel rasgando' }[id]}`);
     }
   }
   // --- legenda só nas palavras importantes ---

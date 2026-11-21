@@ -141,6 +141,52 @@ const GEN = {
     for (let i = 0; i < L.length; i++) { const t = i / SR, u = t / d; const env = Math.sin(Math.PI * u) ** 1.5; const v = (Math.sin(2 * Math.PI * 55 * t) + 0.6 * Math.sin(2 * Math.PI * 58.3 * t) + 0.25 * Math.sin(2 * Math.PI * 110.5 * t)) * env * 0.28 + noise(rng) * env * 0.02; L[i] = v; R[i] = v * 0.95; }
     return b;
   },
+  // palmas do "boom clap": bumbo grave + palma (várias batidas de ruído quase juntas, como mãos de verdade)
+  clap(ctx, rng) {
+    const d = 0.9, b = buf(ctx, d), L = b.getChannelData(0), R = b.getChannelData(1);
+    const taps = [0, 0.009, 0.017, 0.028];
+    let x1 = 0, x2 = 0, y1 = 0, y2 = 0, ph = 0; const c = biquadBP(null, 1250, 1.1);
+    for (let i = 0; i < L.length; i++) {
+      const t = i / SR; const n = noise(rng);
+      let env = 0; for (const tp of taps) { const u = t - tp; if (u >= 0) env = Math.max(env, Math.exp(-u / (tp === taps[3] ? 0.11 : 0.006))); }
+      const y = c.b0 * n + c.b2 * x2 - c.a1 * y1 - c.a2 * y2; x2 = x1; x1 = n; y2 = y1; y1 = y;
+      ph += 2 * Math.PI * (48 + 90 * Math.exp(-t / 0.03)) / SR;
+      const kick = Math.sin(ph) * Math.exp(-t / 0.16);
+      const v = Math.tanh(1.4 * (y * env * 2.2 + kick * 0.75));
+      L[i] = v * 0.8; R[i] = v * 0.8;
+    }
+    return b;
+  },
+  // sinos de Natal: sino metálico (síntese FM, parciais inarmônicos) + guizos chacoalhando
+  sinos(ctx, rng) {
+    const d = 1.8, b = buf(ctx, d), L = b.getChannelData(0), R = b.getChannelData(1);
+    const notes = [[0, 1568], [0.16, 1319], [0.32, 1760]];
+    let hp = 0, prev = 0;
+    for (let i = 0; i < L.length; i++) {
+      const t = i / SR; let bell = 0;
+      for (const [t0, f] of notes) { const u = t - t0; if (u < 0) continue; const mod = Math.sin(2 * Math.PI * f * 1.41 * u) * 2.2 * Math.exp(-u * 3); bell += Math.sin(2 * Math.PI * f * u + mod) * Math.exp(-u * 2.6) * Math.min(1, u / 0.002); }
+      // guizos: rajadas curtas de ruído agudo, 4 por segundo, sumindo
+      const n = noise(rng); hp = 0.85 * (hp + n - prev); prev = n;
+      const sh = Math.pow(Math.max(0, Math.sin(Math.PI * 2 * 4 * t)), 8) * Math.exp(-t * 1.4);
+      const v = bell * 0.22 + hp * sh * 0.22;
+      L[i] = v * (1 + 0.15 * Math.sin(t * 5)); R[i] = v * (1 - 0.15 * Math.sin(t * 5));
+    }
+    return b;
+  },
+  // papel rasgando: ruído com estalos irregulares que vai do grave ao agudo
+  rasgo(ctx, rng) {
+    const d = 0.55, b = buf(ctx, d), L = b.getChannelData(0), R = b.getChannelData(1);
+    let x1 = 0, x2 = 0, y1 = 0, y2 = 0, grain = 0, hold = 0;
+    for (let i = 0; i < L.length; i++) {
+      const u = i / L.length; const c = biquadBP(null, 900 + 3200 * u, 0.8);
+      const n = noise(rng); const y = c.b0 * n + c.b2 * x2 - c.a1 * y1 - c.a2 * y2; x2 = x1; x1 = n; y2 = y1; y1 = y;
+      if (hold-- <= 0) { hold = 60 + rng() * 420; grain = 0.35 + rng() * 0.65; }
+      const env = Math.sin(Math.PI * Math.min(1, u * 1.15)) ** 0.6 * (u > 0.87 ? (1 - u) / 0.13 : 1);
+      const v = y * grain * env * 1.6;
+      L[i] = v * (1.1 - u * 0.4); R[i] = v * (0.7 + u * 0.4);
+    }
+    return b;
+  },
   glitch(ctx, rng) {
     const d = 0.35, b = buf(ctx, d), L = b.getChannelData(0), R = b.getChannelData(1);
     let hold = 0, val = 0;
@@ -152,7 +198,7 @@ const GEN = {
 export const SFX_KINDS = Object.keys(GEN);
 
 // Onde o "ponto" do som cai (o riser termina no corte, o whoosh tem o meio no corte).
-export const SFX_ANCHOR = { whoosh: 0.32, riser: 1.62, impact: 0, hit: 0, boom: 0, pop: 0, click: 0, ding: 0, glitch: 0, beep: 0, swish: 0.12, camera: 0, notify: 0, drop: 0, tension: 2.4 };
+export const SFX_ANCHOR = { whoosh: 0.32, riser: 1.62, impact: 0, hit: 0, boom: 0, pop: 0, click: 0, ding: 0, glitch: 0, beep: 0, swish: 0.12, camera: 0, notify: 0, drop: 0, tension: 2.4, clap: 0, sinos: 0, rasgo: 0.1 };
 
 export function makeSfx(ctx, kind, variant = 0) {
   const key = kind + ':' + variant;

@@ -21,6 +21,7 @@ uniform float uLetterbox, uLeak, uMirror, uSharp; uniform vec2 uRes;
 uniform float uChroma, uVHS, uBloom, uLens, uBlur, uShadows, uHighlights, uGlitchFx, uBurn;
 
 float hash(vec2 p){ p = fract(p*vec2(123.34, 456.21)); p += dot(p, p+45.32); return fract(p.x*p.y); }
+float vnoise(float x){ float i = floor(x), f = fract(x); return mix(hash(vec2(i, 1.7)), hash(vec2(i+1.0, 1.7)), f*f*(3.0-2.0*f)); }
 
 vec3 rawSample(sampler2D t, vec4 crop, vec2 q, float lod){
   q = clamp(q, 0.0, 1.0);
@@ -94,6 +95,37 @@ vec3 composite(vec2 q){
     float r = smoothstep(0.0,1.0,p)*1.25;
     return mix(sampA(q), sampB(q), smoothstep(r, r-0.02, length(d)));
   }
+  if (uTrans == 12) {                                                                              // ventilador: pás escuras girando passam na frente
+    vec2 d = (q-vec2(0.5,0.42))*vec2(uRes.x/uRes.y,1.0);
+    float ang = atan(d.y, d.x) + p*4.2;                                                             // as pás giram durante a troca
+    float sector = 6.2831853/3.0;
+    float a = mod(ang, sector) / sector;                                                            // 0..1 dentro de cada pá
+    float cover = sin(3.1415926*p);                                                                 // a pá cresce e só cobre tudo bem no meio (a troca fica escondida)
+    float r = length(d);
+    float soft = 0.015 + 0.06*cover;                                                                // borda borrada pelo giro
+    float hw = 0.5*cover*cover + soft*0.5*smoothstep(0.9, 1.0, cover);
+    float blade = smoothstep(0.5-hw-soft, 0.5-hw, a) * (1.0 - smoothstep(0.5+hw, 0.5+hw+soft, a));
+    vec3 base = p < 0.5 ? blurA(q, vec2(0.012*cover, 0.0)) : blurB(q, vec2(0.012*cover, 0.0));
+    vec3 bc = vec3(0.07,0.075,0.085) + vec3(0.05)*exp(-r*3.0) + vec3(0.025)*sin(a*3.14159);            // plástico escuro com brilho no centro
+    return mix(base, bc, blade);
+  }
+  if (uTrans == 13) {                                                                              // papel rasgando: a imagem de cima é rasgada e revela a de baixo
+    vec2 dir = normalize(vec2(1.0, 0.55));
+    vec2 c = (q-0.5)*vec2(uRes.x/uRes.y,1.0);
+    float u = dot(c, dir), v = dot(c, vec2(-dir.y, dir.x));
+    float jag = (vnoise(v*46.0)-0.5)*0.035 + (vnoise(v*11.0+3.0)-0.5)*0.07 + (hash(vec2(floor(v*160.0),7.0))-0.5)*0.008;
+    float e = smoothstep(0.0,1.0,p);
+    float edge = mix(-0.62, 0.62, e);
+    float x = u + jag - edge;                                                                       // < 0: já rasgou (mostra B)
+    float fib = 0.012 + vnoise(v*70.0)*0.016;                                                      // fibra branca do papel na borda
+    vec3 b = sampB(q) * (1.0 - 0.35*smoothstep(-0.07, 0.0, x));                                     // sombra do papel sobre a imagem nova
+    vec2 lift = dir*0.018*smoothstep(0.25, 0.0, x)*step(0.0, x);                                   // o papel levanta perto do rasgo
+    vec3 a = sampA(q - lift) * (1.0 - 0.18*smoothstep(0.12, 0.0, x));
+    vec3 paper = vec3(0.95,0.94,0.9) - vec3(0.12)*vnoise(v*120.0);
+    if (x < 0.0) return b;
+    if (x < fib) return paper;
+    return a;
+  }
   return p < 0.5 ? sampA(q) : sampB(q);
 }
 
@@ -158,7 +190,7 @@ void main(){
   o = vec4(clamp(c,0.0,1.0), 1.0);
 }`;
 
-export const TRANS_ID = { cut: 0, dissolve: 1, dip: 2, flash: 3, whip: 4, zoom: 5, glitch: 6, blur: 7, spin: 8, burn: 9, slide: 10, mask: 11 };
+export const TRANS_ID = { cut: 0, dissolve: 1, dip: 2, flash: 3, whip: 4, zoom: 5, glitch: 6, blur: 7, spin: 8, burn: 9, slide: 10, mask: 11, fan: 12, rasgo: 13 };
 
 export class Compositor {
   constructor(canvas, { preserve = true } = {}) {

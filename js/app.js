@@ -4,7 +4,8 @@ import { loadSource, validateFile } from './engine/media.js';
 import { analyzeSource, analyzeMusicSource, forget } from './engine/pipeline.js';
 import { newSpec, resolveStyle, fmtN, fmtDur } from './engine/director.js';
 import { interpret, loadTaught, forgetTaught, loadLog } from './engine/brain.js';
-import { ACTIONS, CATEGORY_LABEL } from './engine/actions.js';
+import { ACTIONS, CATEGORY_LABEL, SFX_PT } from './engine/actions.js';
+import { makeSfx } from './engine/sfx.js';
 import { vocabularyStats } from './engine/concepts.js';
 import { musicMoodScores } from './engine/analyze-audio.js';
 import { buildPlan } from './engine/planner.js';
@@ -12,7 +13,7 @@ import { Renderer, visualSegments, VideoPool, MixCache } from './engine/render.j
 import { Compositor } from './engine/gl.js';
 import { PRESETS, LOOKS, FORMAT_IDS } from './engine/styles.js';
 import { PLATFORMS } from './engine/platforms.js';
-import { CAPTION_STYLES, SHAPES, TEXT_STYLES, drawTextBlock, drawCaption, groupWords, markEmphasis, drawShape, ensureFonts, FONTS, googleFontsHref } from './engine/captions.js';
+import { CAPTION_STYLES, SHAPES, TEXT_STYLES, drawTextBlock, drawCaption, groupWords, markEmphasis, drawShape, drawConfetti, ensureFonts, FONTS, googleFontsHref, MONTHS_PT } from './engine/captions.js';
 import { alignScript, whisperTranscribe, whisperText, LIGHT_DEVICE } from './engine/transcribe.js';
 import { checkPlan, checkExport, CAT_LABEL } from './engine/qc.js';
 import { dropAudioCache } from './engine/audio-mix.js';
@@ -22,7 +23,7 @@ import { uid, deepClone, clamp, sleep } from './engine/util.js';
 import { icon } from './icons.js';
 import * as store from './store.js';
 
-export const APP_VERSION = '2.8', APP_DATE = '17/11/2026';
+export const APP_VERSION = '2.9', APP_DATE = '21/11/2026';
 
 const $ = s => document.querySelector(s);
 const el = (tag, attrs = {}, ...kids) => { const e = document.createElement(tag); for (const [k, v] of Object.entries(attrs)) { if (k === 'class') e.className = v; else if (k === 'html') e.innerHTML = v; else if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else if (v === true) e.setAttribute(k, ''); else if (v !== false && v != null) e.setAttribute(k, v); } for (const k of kids.flat()) if (k != null) e.append(k.nodeType ? k : document.createTextNode(String(k))); return e; };
@@ -131,11 +132,19 @@ function paintSample(c, t, kind, id, extra = {}) {
   const area = { x: W * 0.06, y: H * 0.1, w: W * 0.88, h: H * 0.75 };
   if (kind === 'style') {
     const cs = PRESETS[id].captions.style;
-    if (FXs.phrase) drawTextBlock(ctx, { text: FXs.perCut ? TEXT_STYLES[FXs.phrase].sample.split('|')[k % 3].trim() : TEXT_STYLES[FXs.phrase].sample, style: FXs.phrase, start: 0, dur: 99, y: null, beats: null }, t + 1, W, H, area);
+    if (FXs.months) { if (k === 0) drawTextBlock(ctx, { text: FXs.defaultPhrase, style: FXs.phrase, start: 0, dur: 1.15, y: null }, t, W, H, area); else drawTextBlock(ctx, { text: MONTHS_PT[(k - 1) % 12], style: 'rotulo', start: k * 1.15, dur: 1.15, y: null }, t, W, H, area); }
+    else if (FXs.phrase === 'cartaosd') drawTextBlock(ctx, { text: FXs.defaultPhrase, style: 'cartaosd', start: 0, dur: 4.6, y: null }, t, W, H, area);
+    else if (FXs.phrase) drawTextBlock(ctx, { text: FXs.perCut ? TEXT_STYLES[FXs.phrase].sample.split('|')[k % 3].trim() : TEXT_STYLES[FXs.phrase].sample, style: FXs.phrase, start: 0, dur: 99, y: null, beats: null }, t + 1, W, H, area);
     if (!FXs.musicOnly) drawCaption(ctx, groupWords(markEmphasis(SAMPLE), cs), t, cs, area, H * (FXs.captionY || 0.62), {});
   }
   else if (kind === 'cap') drawCaption(ctx, groupWords(markEmphasis(SAMPLE), id), t, id, area, H * 0.66, {});
-  else if (kind === 'block') drawTextBlock(ctx, { text: extra.text || TEXT_STYLES[id].sample, style: id, start: 0, dur: 4.6, y: TEXT_STYLES[id].render === 'loading' ? 0.3 : 0.42, beats: [0.2, 0.6, 1, 1.4, 1.8, 2.2, 2.6, 3, 3.4, 3.8] }, t, W, H, area);
+  else if (kind === 'block' && TEXT_STYLES[id].perCut) {
+    // estilos que trocam a cada corte: na prévia o pedaço troca a cada 1,15 s, como se fosse um corte
+    const parts = String(extra.text || TEXT_STYLES[id].sample).split(/\s*\|\s*/).filter(Boolean);
+    drawTextBlock(ctx, { text: parts[k % parts.length] || '', style: id, start: k * 1.15, dur: 1.15, y: null }, t, W, H, area);
+  }
+  else if (kind === 'block') drawTextBlock(ctx, { text: extra.text || TEXT_STYLES[id].sample, style: id, start: 0, dur: 4.6, y: TEXT_STYLES[id].render === 'loading' ? 0.3 : TEXT_STYLES[id].render === 'list' || TEXT_STYLES[id].render === 'sd' ? null : 0.42, beats: id === 'lista' ? [0.9, 1.7, 2.5, 3.3] : [0.2, 0.6, 1, 1.4, 1.8, 2.2, 2.6, 3, 3.4, 3.8] }, t, W, H, area);
+  else if (kind === 'fx' && id === 'confetti') drawConfetti(ctx, t % 2.6, 2.6, W, H, 3);
   else if (kind === 'shape') drawShape(ctx, { shape: id, text: extra.text || 'SIGA PARA MAIS', x: 0.5, y: id === 'arc' ? 0.22 : 0.42, size: 1, start: 0, dur: 99, color: extra.color || '#FFFFFF', accent: '#FFE81F' }, t + 0.6, W, H, null);
 }
 function animCanvases(selector) {
@@ -464,8 +473,8 @@ function thumbForSeg(seg) {
   const sh = it.video.shots.find(s => seg.in >= s.start - 0.01 && seg.in < s.end) || it.video.shots[0];
   return sh ? sh.thumb : null;
 }
-const TRANS = { cut: 'Corte seco', dissolve: 'Dissolver', dip: 'Escurecer', flash: 'Flash', whip: 'Chicote', zoom: 'Zoom', glitch: 'Glitch' };
-const TR_MARK = { dissolve: 'D', dip: 'E', flash: 'F', whip: 'C', zoom: 'Z', glitch: 'G' };
+const TRANS = { cut: 'Corte seco', dissolve: 'Dissolver', dip: 'Escurecer', flash: 'Flash', whip: 'Chicote', zoom: 'Zoom', glitch: 'Glitch', blur: 'Desfoque', spin: 'Giro', burn: 'Queima de filme', slide: 'Empurrar', mask: 'Máscara redonda', fan: 'Ventilador', rasgo: 'Papel rasgando' };
+const TR_MARK = { dissolve: 'D', dip: 'E', flash: 'F', whip: 'C', zoom: 'Z', glitch: 'G', blur: 'B', spin: 'R', burn: 'Q', slide: 'S', mask: 'M', fan: 'V', rasgo: 'P' };
 function renderTimeline() {
   const inner = $('#tlInner'), sc = $('#tlScroll'); inner.innerHTML = '';
   const p = curPlan(); if (!p) return;
@@ -727,6 +736,10 @@ function textSheet() {
     switchRow('Barra de progresso', resolveStyle(sp).progressBar, on => { closeSheet(); changeSpec(s => { s.over.progressBar = on; }, on ? 'Barra de progresso' : 'Sem barra'); }),
     label('Texto com forma'), el('div', { class: 'field' }, txt), sw, follow, g,
     el('button', { class: 'btn primary wide', style: 'margin-top:12px', onclick: () => { const item = { shape, text: (txt.value || 'SIGA PARA MAIS').trim(), follow: follow.querySelector('input').checked, color }; closeSheet(); changeSpec(s => { s.texts = [...(s.texts || []), item]; }, 'Texto: ' + SHAPES[shape].label); } }, 'Adicionar texto com forma'),
+    label('Confete com palmas'),
+    el('p', { class: 'muted' }, `Estoura confete na tela com palmas (o "boom clap"), no ponto da prévia: ${tc(S.renderer ? S.renderer.t || 0 : 0, false)}. Bom para revelação e final.`),
+    el('div', { class: 'gal' }, galBtn('fx', 'confetti', 'Confete (boom clap)', 'Dois canhões nos cantos de baixo, papeizinhos girando e caindo.', (sp.confetti || []).length > 0, () => { const at = +(S.renderer ? S.renderer.t || 0 : 0).toFixed(2); closeSheet(); changeSpec(s => { ACTIONS.CONFETTI.apply(s, { at, on: true }); }, 'Confete em ' + tc(at, false)); })),
+    (sp.confetti || []).length ? el('div', { class: 'chips', style: 'margin-top:8px' }, el('button', { class: 'chip', onclick: () => { closeSheet(); changeSpec(s => { ACTIONS.CONFETTI.apply(s, { on: false }); }, 'Sem confete'); } }, 'Tirar o confete')) : null,
     (sp.texts || []).length ? [label('Textos no vídeo (toque para tirar)'), el('div', { class: 'chips' }, ...sp.texts.map((t, i) => el('button', { class: 'chip on', onclick: () => { closeSheet(); changeSpec(s => { s.texts.splice(i, 1); }, 'Texto removido'); } }, `${t.shape === 'block' ? (TEXT_STYLES[t.style] || TEXT_STYLES.contorno).label : SHAPES[t.shape].label}: ${t.text.slice(0, 40)} ×`)))] : null);
   upd(); bupd();
 }
@@ -752,11 +765,26 @@ function audioSheet() {
     slider('Música', -24, 12, 1, a.musicDb || 0, x => (x > 0 ? '+' : '') + x + ' dB', null, x => commit(s => { s.audio.musicDb = x; }, 'Volume da música')),
     slider('Efeitos', -20, 10, 1, a.sfxDb || 0, x => (x > 0 ? '+' : '') + x + ' dB', null, x => commit(s => { s.audio.sfxDb = x; }, 'Volume dos efeitos')),
     slider('Qtd. efeitos', 0, 1, 0.05, E.sfx.density, x => Math.round(x * 100) + '%', null, x => commit(s => { s.over.sfx = { ...(s.over.sfx || {}), density: x }; }, 'Quantidade de efeitos')),
+    label('Efeitos sonoros'),
+    sfxPicker(v),
     switchRow('Tirar o som original dos vídeos', !!a.muteOriginal, on => commit(s => { s.audio.muteOriginal = on; }, on ? 'Sem som original' : 'Com som original')),
     switchRow('Cortar no ritmo da música', !!E.pacing.beatSync, on => commit(s => { s.over.pacing = { ...(s.over.pacing || {}), beatSync: on }; }, 'Ritmo da música')),
     switchRow('Zoom pulsando na batida', (E.beatPulse || 0) > 0, on => commit(s => { s.over.beatPulse = on ? 0.7 : 0; }, 'Pulso na batida')),
     switchRow('Tirar silêncios', !!E.silence.remove, on => commit(s => { s.over.silence = { ...(s.over.silence || {}), remove: on }; }, 'Silêncios')),
     switchRow('Tirar "ahn" e repetições (precisa de legenda)', !!E.fillers, on => commit(s => { s.over.fillers = on; }, 'Muletas')));
+}
+// efeitos sonoros: toca para ouvir e coloca no ponto da prévia (todos gerados por código, sem direitos autorais)
+const SFX_MENU = ['clap', 'sinos', 'rasgo', 'boom', 'whoosh', 'impact', 'riser', 'pop', 'ding', 'swish', 'camera', 'notify', 'drop', 'glitch'];
+let sfxCtx = null;
+function playSfx(kind) {
+  try { sfxCtx = sfxCtx || new (window.AudioContext || window.webkitAudioContext)(); if (sfxCtx.state === 'suspended') sfxCtx.resume(); const src = sfxCtx.createBufferSource(), g = sfxCtx.createGain(); src.buffer = makeSfx(sfxCtx, kind); g.gain.value = 0.8; src.connect(g).connect(sfxCtx.destination); src.start(); } catch (e) { toast('Não deu para tocar o som neste aparelho.'); }
+}
+function sfxPicker(v) {
+  let kind = null;
+  const at = () => +(S.renderer ? S.renderer.t || 0 : 0).toFixed(2);
+  const put = el('button', { class: 'btn primary', disabled: true, onclick: () => { if (!kind) return; const t = at(); closeSheet(); changeSpec(s => { s.sfxRequests = [...(s.sfxRequests || []), { kind, at: t, count: 1 }]; }, `Som: ${SFX_PT[kind]} em ${tc(t, false)}`); } }, `Colocar em ${tc(at(), false)}`);
+  const chips = el('div', { class: 'chips' }, ...SFX_MENU.map(k => el('button', { class: 'chip', onclick: e => { kind = k; playSfx(k); put.disabled = false; [...chips.children].forEach(b => b.classList.toggle('on', b === e.currentTarget)); } }, SFX_PT[k][0].toUpperCase() + SFX_PT[k].slice(1))));
+  return [el('p', { class: 'muted' }, 'Toque para ouvir e coloque no ponto da prévia. Todos são gerados por código, sem direitos autorais.'), chips, el('div', { style: 'margin-top:8px' }, put)];
 }
 // Cor
 function colorSheet() {

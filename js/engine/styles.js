@@ -39,7 +39,7 @@ const base = {
   ending: { fade: true },
 };
 
-export const FORMAT_IDS = ['montagemfrase', 'letra', 'memes', 'dividida', 'historia', 'susto', 'phonk', 'vlogpiada'];
+export const FORMAT_IDS = ['montagemfrase', 'letra', 'memes', 'dividida', 'historia', 'susto', 'phonk', 'vlogpiada', 'retro', 'cartaosd'];
 export const PRESETS = {
   // ===== FORMATOS VIRAIS (pesquisa de 17/11/2026, vídeos com 300 mil a 5,7 milhões de views) =====
   // Cada formato é uma receita completa: layout, ritmo, frase, legenda, som e cor. Ver docs/tendencias.md.
@@ -83,6 +83,17 @@ export const PRESETS = {
     transitions: { mix: { cut: 1 }, dur: 0 }, effects: { punchIn: 0.4 }, color: { look: 'bright', intensity: 0.8 },
     music: { mood: 'upbeat', levelDb: -17, duckDb: -10 }, sfx: { density: 0.25, kinds: ['boom', 'pop'] }, captions: { style: 'vlog' },
     fmt: { punchline: true, musicEnter: 0.3, phrase: 'gancho', phraseSecs: 4 } },
+  // ===== pesquisa de 21/11/2026 (later.com, newengen.com, socialbee.com, postdom.com, virlo.ai) =====
+  retro: { short: 'Frase de abertura, um mês por corte', label: 'Retrospectiva do ano', desc: 'Abre com a frase "sinto que não fiz nada esse ano" e depois um clipe por mês, de janeiro a dezembro, com o nome do mês grande. Cortes de 1 s na batida, só música.',
+    pacing: { avgShot: 1.05, minShot: 0.8, maxShot: 1.5, variation: 0.2, beatSync: true }, hook: { enabled: false },
+    transitions: { mix: { cut: 1 }, dur: 0 }, effects: { punchIn: 0.08 }, color: { look: 'warmpop', intensity: 0.8 },
+    music: { mood: 'upbeat', levelDb: -6, duckDb: -6 }, sfx: { density: 0, kinds: [] }, captions: { style: 'dinamico' }, ending: { fade: false },
+    fmt: { musicOnly: true, months: true, phrase: 'caixa', defaultPhrase: 'sinto que não fiz nada esse ano' } },
+  cartaosd: { short: 'Cartão SD e clipes rapidíssimos', label: 'Ultimamente no cartão SD', desc: 'Um cartão de memória desenhado abre o vídeo e depois vem uma sequência rápida de clipes de menos de 1 s, na batida, só música. O "lately on my SD card".',
+    pacing: { avgShot: 0.62, minShot: 0.4, maxShot: 0.95, variation: 0.3, beatSync: true }, hook: { enabled: false },
+    transitions: { mix: { cut: 1 }, dur: 0 }, effects: { punchIn: 0.05 }, color: { look: 'filme', intensity: 0.85 },
+    music: { mood: 'upbeat', levelDb: -6, duckDb: -6 }, sfx: { density: 0, kinds: [] }, captions: { style: 'calmo' }, ending: { fade: false },
+    fmt: { musicOnly: true, phrase: 'cartaosd', phraseSecs: 2.2, defaultPhrase: 'ultimamente no meu cartão SD' } },
   action: { label: 'Ação Hollywood', desc: 'Cortes curtos, impacto, som forte, tomadas heroicas mais longas de vez em quando.',
     pacing: { avgShot: 1.0, minShot: 0.4, maxShot: 2.8, variation: 0.55, beatSync: true }, hook: { enabled: true, seconds: 3 },
     transitions: { mix: { cut: 0.6, flash: 0.15, whip: 0.15, zoom: 0.1 }, dur: 0.18 },
